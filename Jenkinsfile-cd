@@ -11,24 +11,39 @@ pipeline {
         string(name: 'VISITS_SERVICE_BRANCH', defaultValue: 'main', description: 'Branch for spring-petclinic-visits-service')
     }
     environment {
-        DOCKER_HUB_CREDENTIALS = credentials('docker-hub-token')
+        DOCKER_HUB_TOKEN = credentials('docker-hub-token')  // Bind as Secret Text (optional for environment)
+        DOCKER_HUB_USERNAME = 'vuhoabinhthachhoa'  // Replace with your Docker Hub username
+        CHANGED_SERVICES = 'admin-server,api-gateway,config-server,customers-service,discovery-server,genai-service,vets-service,visits-service'  // Example; set dynamically if needed
+        IMAGE_TAG = 'latest'  // Example; set dynamically if needed
         HELM_RELEASE_NAME = 'petclinic'
-        HELM_CHART = 'spring-petclinic-microservices'  // Chart name (not the repo name)
-        HELM_REPO_URL = 'https://github.com/OpsInUs/DA02-HelmRepo.git'  // Git URL for cloning
+        HELM_CHART = 'spring-petclinic-microservices'
+        HELM_REPO_URL = 'https://github.com/OpsInUs/DA02-HelmRepo.git'
         DOCKER_REGISTRY = 'vuhoabinhthachhoa'
     }
     stages {
         stage('Clone Helm Repository') {
             steps {
-                // Clone the DA02-HelmRepo repository
                 sh """
                 git clone ${HELM_REPO_URL} DA02-HelmRepo
                 """
             }
         }
-        stage('Authenticate with Docker Hub') {
+        stage('Build and Push Docker Images') {
             steps {
-                sh 'echo $DOCKER_HUB_CREDENTIALS_PSW | docker login -u $DOCKER_HUB_CREDENTIALS_USR --password-stdin'
+                script {
+                    def servicesToBuild = env.CHANGED_SERVICES.split(',')
+                    
+                    withCredentials([string(credentialsId: 'docker-hub-token', variable: 'DOCKER_HUB_TOKEN')]) {
+                        sh '''
+                            echo "${DOCKER_HUB_TOKEN}" | docker login -u ${DOCKER_HUB_USERNAME} --password-stdin
+                        '''
+                    }
+                    
+                    for (service in servicesToBuild) {
+                        echo "Building ${service} with tag: ${env.IMAGE_TAG}"
+                        buildAndPushService(service)
+                    }
+                }
             }
         }
         stage('Pull and Deploy Images') {
@@ -43,42 +58,36 @@ pipeline {
                             'discovery-server': params.DISCOVERY_SERVER_BRANCH,
                             'genai-service': params.GENAI_SERVICE_BRANCH,
                             'vets-service': params.VETS_SERVICE_BRANCH,
-                            'visits-service': params.VISITS_SERVICE_BRANCH
+                            'visits-service': params.VETS_SERVICE_BRANCH
                         ]
                         def helmSet = ''
                         def updatedServices = []
 
-                        // Iterate over services and process only non-main branches
                         services.each { serviceName, branch ->
                             if (branch != 'main') {
                                 def commitHash = sh(script: "git ls-remote https://github.com/spring-petclinic/spring-petclinic-microservices ${branch} | head -1 | cut -f1", returnStdout: true).trim()
                                 if (!commitHash) {
                                     error "Branch ${branch} not found for ${serviceName}."
                                 }
-                                def tag = commitHash.substring(0, 7) // Short SHA
+                                def tag = commitHash.substring(0, 7)
                                 def fullImageName = "spring-petclinic-${serviceName}"
                                 sh "docker pull ${DOCKER_REGISTRY}/${fullImageName}:${tag}"
-                                // Update Helm set command for repository and tag
                                 helmSet += "services.${serviceName}.image.repository=${fullImageName},services.${serviceName}.image.tag=${tag},"
                                 updatedServices << serviceName
                             }
                         }
 
-                        // Deploy only if there are services to update
                         if (!helmSet.isEmpty()) {
-                            helmSet = helmSet.substring(0, helmSet.length() - 1) // Remove trailing comma
+                            helmSet = helmSet.substring(0, helmSet.length() - 1)
                             helmSet += ",global.namespace=dev-review"
                             sh """
-                            # Update chart dependencies (if any)
                             helm dependency update DA02-HelmRepo/${HELM_CHART}
-                            # Install or upgrade the Helm release using the local chart
                             helm upgrade --install $HELM_RELEASE_NAME DA02-HelmRepo/${HELM_CHART} \
                                 --set ${helmSet} \
                                 --namespace dev-review \
                                 --kubeconfig=\$KUBECONFIG \
                                 --kube-context gke_thanh-devops_us-central1-a_petclinic
                             """
-                            // Patch services to use NodePort
                             updatedServices.each { service ->
                                 sh """
                                 kubectl patch service ${service} -n dev-review --type='json' -p='[{"op": "replace", "path": "/spec/type", "value": "NodePort"}]' --kubeconfig=\$KUBECONFIG
@@ -88,7 +97,6 @@ pipeline {
                             echo "No services with non-main branches to deploy."
                         }
 
-                        // Provide NodePort information after deployment
                         if (!updatedServices.isEmpty()) {
                             echo "Deployment completed. Use the following NodePort endpoints to test:"
                             updatedServices.each { service ->
@@ -116,7 +124,14 @@ pipeline {
     post {
         always {
             sh 'docker logout'
-            // No need to remove the Helm repo since we cloned it
         }
     }
+}
+
+// Example buildAndPushService function (assuming it's defined elsewhere or needs implementation)
+def buildAndPushService(service) {
+    sh """
+        docker build -t ${DOCKER_REGISTRY}/${service}:${env.IMAGE_TAG} -f Dockerfile.${service} .
+        docker push ${DOCKER_REGISTRY}/${service}:${env.IMAGE_TAG}
+    """
 }
