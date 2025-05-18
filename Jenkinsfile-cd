@@ -13,17 +13,16 @@ pipeline {
     environment {
         DOCKER_HUB_CREDENTIALS = credentials('docker-hub-token')
         HELM_RELEASE_NAME = 'petclinic'
-        HELM_REPO_NAME = 'DA02-HelmRepo'
-        HELM_REPO_URL = 'https://github.com/OpsInUs/DA02-HelmRepo'
-        HELM_CHART = 'spring-petclinic-microservices'
+        HELM_CHART = 'spring-petclinic-microservices'  // Chart name (not the repo name)
+        HELM_REPO_URL = 'https://github.com/OpsInUs/DA02-HelmRepo.git'  // Git URL for cloning
         DOCKER_REGISTRY = 'vuhoabinhthachhoa'
     }
     stages {
-        stage('Add Helm Repository') {
+        stage('Clone Helm Repository') {
             steps {
+                // Clone the DA02-HelmRepo repository
                 sh """
-                helm repo add ${HELM_REPO_NAME} ${HELM_REPO_URL}
-                helm repo update
+                git clone ${HELM_REPO_URL} DA02-HelmRepo
                 """
             }
         }
@@ -59,8 +58,8 @@ pipeline {
                                 def tag = commitHash.substring(0, 7) // Short SHA
                                 def fullImageName = "spring-petclinic-${serviceName}"
                                 sh "docker pull ${DOCKER_REGISTRY}/${fullImageName}:${tag}"
-                                // Update Helm set command for repository, tag, and type
-                                helmSet += "services.${serviceName}.image.repository=${fullImageName},services.${serviceName}.image.tag=${tag},services.${serviceName}.spec.type=NodePort,"
+                                // Update Helm set command for repository and tag
+                                helmSet += "services.${serviceName}.image.repository=${fullImageName},services.${serviceName}.image.tag=${tag},"
                                 updatedServices << serviceName
                             }
                         }
@@ -70,12 +69,21 @@ pipeline {
                             helmSet = helmSet.substring(0, helmSet.length() - 1) // Remove trailing comma
                             helmSet += ",global.namespace=dev-review"
                             sh """
-                            helm upgrade --install $HELM_RELEASE_NAME ${HELM_REPO_NAME}/${HELM_CHART} \
+                            # Update chart dependencies (if any)
+                            helm dependency update DA02-HelmRepo/${HELM_CHART}
+                            # Install or upgrade the Helm release using the local chart
+                            helm upgrade --install $HELM_RELEASE_NAME DA02-HelmRepo/${HELM_CHART} \
                                 --set ${helmSet} \
                                 --namespace dev-review \
                                 --kubeconfig=\$KUBECONFIG \
                                 --kube-context gke_thanh-devops_us-central1-a_petclinic
                             """
+                            // Patch services to use NodePort
+                            updatedServices.each { service ->
+                                sh """
+                                kubectl patch service ${service} -n dev-review --type='json' -p='[{"op": "replace", "path": "/spec/type", "value": "NodePort"}]' --kubeconfig=\$KUBECONFIG
+                                """
+                            }
                         } else {
                             echo "No services with non-main branches to deploy."
                         }
@@ -108,7 +116,7 @@ pipeline {
     post {
         always {
             sh 'docker logout'
-            sh "helm repo remove ${HELM_REPO_NAME} || true"
+            // No need to remove the Helm repo since we cloned it
         }
     }
 }
