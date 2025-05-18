@@ -1,0 +1,92 @@
+pipeline {
+    agent any
+    parameters {
+        choice(
+            name: 'SERVICE_NAME',
+            choices: [
+                'spring-petclinic-admin-server',
+                'spring-petclinic-api-gateway',
+                'spring-petclinic-config-server',
+                'spring-petclinic-customers-service',
+                'spring-petclinic-discovery-server',
+                'spring-petclinic-genai-service',
+                'spring-petclinic-vets-service',
+                'spring-petclinic-visits-service'
+            ],
+            description: 'Select the service to deploy'
+        )
+        string(
+            name: 'BRANCH_NAME',
+            defaultValue: 'main',
+            description: 'Branch name for the selected service (use "main" or specify a branch like "dev_vets_service")'
+        )
+    }
+    environment {
+        DOCKER_HUB_CREDENTIALS = credentials('docker-hub-token')
+        HELM_RELEASE_NAME = 'petclinic'
+        HELM_REPO_NAME = 'DA02-HelmRepo'
+        HELM_REPO_URL = 'https://opsinus.github.io/DA02-HelmRepo'
+        HELM_CHART = 'spring-petclinic-microservices'
+        DOCKER_REGISTRY = 'vuhoabinhthachhoa'
+    }
+    stages {
+        stage('Add Helm Repository') {
+            steps {
+                sh """
+                helm repo add ${HELM_REPO_NAME} ${HELM_REPO_URL}
+                helm repo update
+                """
+            }
+        }
+        stage('Authenticate with Docker Hub') {
+            steps {
+                sh 'echo $DOCKER_HUB_CREDENTIALS_PSW | docker login -u $DOCKER_HUB_CREDENTIALS_USR --password-stdin'
+            }
+        }
+        stage('Pull Docker Image') {
+            steps {
+                script {
+                    // Determine the image tag (main or commit ID/short SHA)
+                    def tag = params.BRANCH_NAME
+                    if (params.BRANCH_NAME != 'main') {
+                        def commitHash = sh(script: "git ls-remote https://github.com/spring-petclinic/spring-petclinic-microservices ${params.BRANCH_NAME} | head -1 | cut -f1", returnStdout: true).trim()
+                        if (!commitHash) {
+                            error "Branch ${params.BRANCH_NAME} not found in repository."
+                        }
+                        // Use short SHA (first 7 characters) to match CI tagging (e.g., f956b9d)
+                        tag = commitHash.substring(0, 7)
+                    } else {
+                        // Default to latest or v1.0.4 for main branch
+                        tag = 'v1.0.4' // Adjust based on CI's default tag for main
+                    }
+                    // Pull the image for the specified service
+                    sh "docker pull ${DOCKER_REGISTRY}/${params.SERVICE_NAME}:${tag}"
+                    // Store the tag in an environment variable for the Helm stage
+                    env.IMAGE_TAG = tag
+                }
+            }
+        }
+        stage('Deploy to GKE with Helm') {
+            steps {
+                withCredentials([file(credentialsId: 'kubeconfig', variable: 'KUBECONFIG')]) {
+                    script {
+                        // Construct the Helm --set command for only the changed service
+                        def helmSet = "services.${params.SERVICE_NAME.replace('spring-petclinic-', '')}.image=${DOCKER_REGISTRY}/${params.SERVICE_NAME}:${env.IMAGE_TAG},global.namespace=dev-review"
+                        sh """
+                        helm upgrade --install $HELM_RELEASE_NAME ${HELM_REPO_NAME}/${HELM_CHART} \
+                            --set ${helmSet} \
+                            --namespace dev-review \
+                            --kubeconfig=\$KUBECONFIG
+                        """
+                    }
+                }
+            }
+        }
+    }
+    post {
+        always {
+            sh 'docker logout'
+            sh "helm repo remove ${HELM_REPO_NAME} || true"
+        }
+    }
+}
