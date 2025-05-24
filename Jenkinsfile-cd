@@ -44,11 +44,13 @@ pipeline {
 
         stage('Test Gcloud Auth') {
             steps {
-                sh 'gcloud auth list'
-                sh 'gcloud container clusters list'
-                    }
+                withCredentials([file(credentialsId: 'gcloud-config', variable: 'GCLOUD_CONFIG')]) {
+                    sh 'cp $GCLOUD_CONFIG/* ~/.config/gcloud/ -r'
+                    sh 'gcloud container clusters list'
                 }
-
+            }
+        }
+        
         stage('Deploy to Kubernetes') {
             steps {
                 withCredentials([file(credentialsId: 'kubeconfig', variable: 'KUBECONFIG')]) {
