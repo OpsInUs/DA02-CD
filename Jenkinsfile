@@ -13,7 +13,14 @@ pipeline {
             steps {
                 script {
                     env.GIT_COMMIT_SHORT = sh(script: "git rev-parse --short HEAD", returnStdout: true).trim()
-                    env.CURRENT_BRANCH = sh(script: "git rev-parse --abbrev-ref HEAD", returnStdout: true).trim()
+                    
+                    // Get the actual branch name from Jenkins environment or git
+                    env.CURRENT_BRANCH = env.BRANCH_NAME ?: env.GIT_BRANCH ?: sh(script: "git rev-parse --abbrev-ref HEAD", returnStdout: true).trim()
+                    
+                    // Clean branch name (remove origin/ prefix if present)
+                    if (env.CURRENT_BRANCH.startsWith('origin/')) {
+                        env.CURRENT_BRANCH = env.CURRENT_BRANCH.replace('origin/', '')
+                    }
                     
                     def tagName = sh(script: "git tag --points-at HEAD 2>/dev/null | head -1 || echo ''", returnStdout: true).trim()
                     
@@ -101,8 +108,8 @@ pipeline {
                 script {
                     def servicesToBuild = env.CHANGED_SERVICES.split(',')
                     
-                    withCredentials([string(credentialsId: 'docker-hub-token', variable: 'DOCKER_HUB_TOKEN')]) {
-                        sh 'echo "${DOCKER_HUB_TOKEN}" | docker login -u ${DOCKER_REPOSITORY} --password-stdin ${DOCKER_REGISTRY}'
+                    withCredentials([usernamePassword(credentialsId: 'docker-hub-credentials', usernameVariable: 'DOCKER_USERNAME', passwordVariable: 'DOCKER_PASSWORD')]) {
+                        sh 'echo "${DOCKER_PASSWORD}" | docker login -u ${DOCKER_USERNAME} --password-stdin ${DOCKER_REGISTRY}'
                     }
                     
                     servicesToBuild.each { service ->
