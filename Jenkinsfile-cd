@@ -45,7 +45,13 @@ pipeline {
         stage('Test Gcloud Auth') {
             steps {
                 withCredentials([file(credentialsId: 'gcloud-config', variable: 'GCLOUD_CONFIG')]) {
-                    sh 'cp $GCLOUD_CONFIG/* ~/.config/gcloud/ -r'
+                    // Unzip if it's a .zip file, then copy contents
+                    sh '''
+                        mkdir -p ~/.config/gcloud
+                        unzip -o $GCLOUD_CONFIG -d /tmp/gcloud-config
+                        cp -r /tmp/gcloud-config/* ~/.config/gcloud/
+                        rm -rf /tmp/gcloud-config
+                    '''
                     sh 'gcloud container clusters list'
                 }
             }
