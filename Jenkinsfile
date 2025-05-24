@@ -146,7 +146,7 @@ pipeline {
                         // Test Docker command availability
                         sh 'docker --version || echo "Docker not available"'
                         
-                        withCredentials([usernamePassword(credentialsId: 'docker-hub-credentials', usernameVariable: 'DOCKER_USERNAME', passwordVariable: 'DOCKER_PASSWORD')]) {
+                        withCredentials([usernamePassword(credentialsId: 'docker-hub-token', usernameVariable: 'DOCKER_USERNAME', passwordVariable: 'DOCKER_PASSWORD')]) {
                             sh 'echo "Logging into Docker..."'
                             sh 'echo "${DOCKER_PASSWORD}" | docker login -u ${DOCKER_USERNAME} --password-stdin ${DOCKER_REGISTRY} || echo "Docker login failed"'
                         }
