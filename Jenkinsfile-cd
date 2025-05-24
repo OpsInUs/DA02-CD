@@ -51,7 +51,7 @@ pipeline {
                             if (branch != 'main') {
                                 echo "Processing ${serviceName} with branch ${branch}"
                                 
-                                def commitHashCmd = "git ls-remote https://github.com/spring-petclinic/spring-petclinic-microservices refs/heads/${branch} | head -1 | cut -f1"
+                                def commitHashCmd = "git ls-remote https://github.com/OpsInUs/DA02-CD refs/heads/${branch} | head -1 | cut -f1"
                                 def commitHash = sh(script: commitHashCmd, returnStdout: true).trim()
 
                                 if (!commitHash) {
