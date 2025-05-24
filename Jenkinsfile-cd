@@ -11,46 +11,30 @@ pipeline {
         string(name: 'VISITS_SERVICE_BRANCH', defaultValue: 'main', description: 'Branch for spring-petclinic-visits-service')
     }
     environment {
-        DOCKER_HUB_TOKEN = credentials('docker-hub-token')  // Bind as Secret Text (optional for environment)
-        DOCKER_HUB_USERNAME = 'vuhoabinhthachhoa'  // Replace with your Docker Hub username
-        CHANGED_SERVICES = 'admin-server,api-gateway,config-server,customers-service,discovery-server,genai-service,vets-service,visits-service'  // Example; set dynamically if needed
-        IMAGE_TAG = 'latest'  // Example; set dynamically if needed
         HELM_RELEASE_NAME = 'petclinic'
-        HELM_CHART = 'spring-petclinic-microservices'
-        HELM_REPO_URL = 'https://github.com/OpsInUs/DA02-HelmRepo.git'
-        DOCKER_REGISTRY = 'vuhoabinhthachhoa'
+        HELM_CHART_DIR_NAME = 'DA02-HelmRepo'
+        HELM_REPO_HTTPS_URL = 'https://github.com/OpsInUs/DA02-HelmRepo.git'
+        DOCKER_REGISTRY_USERNAME = 'vuhoabinhthachhoa'
+        KUBE_CONTEXT = 'gke_thanh-devops_us-central1-a_petclinic'
+        TARGET_NAMESPACE = 'dev-review'
     }
     stages {
-        stage('Clone Helm Repository') {
-            steps {
-                sh """
-                git clone ${HELM_REPO_URL} DA02-HelmRepo
-                """
-            }
-        }
-        stage('Build and Push Docker Images') {
-            steps {
-                script {
-                    def servicesToBuild = env.CHANGED_SERVICES.split(',')
-                    
-                    withCredentials([string(credentialsId: 'docker-hub-token', variable: 'DOCKER_HUB_TOKEN')]) {
-                        sh '''
-                            echo "${DOCKER_HUB_TOKEN}" | docker login -u ${DOCKER_HUB_USERNAME} --password-stdin
-                        '''
-                    }
-                    
-                    for (service in servicesToBuild) {
-                        echo "Building ${service} with tag: ${env.IMAGE_TAG}"
-                        buildAndPushService(service)
-                    }
-                }
-            }
-        }
-        stage('Pull and Deploy Images') {
+       stage('Clone Helm Repository via HTTPS') { // Stage name updated for clarity
+        steps {
+            checkout([
+                $class: 'GitSCM',
+                branches: [[name: '*/main']], // Or the specific branch of your Helm repo
+                userRemoteConfigs: [[url: HELM_REPO_HTTPS_URL]], // Only the URL is needed
+                extensions: [[$class: 'RelativeTargetDirectory', relativeTargetDir: HELM_CHART_DIR_NAME]]
+            ])
+         }
+		    }
+
+        stage('Deploy to Kubernetes') {
             steps {
                 withCredentials([file(credentialsId: 'kubeconfig', variable: 'KUBECONFIG')]) {
                     script {
-                        def services = [
+                        def servicesToUpdate = [
                             'admin-server': params.ADMIN_SERVER_BRANCH,
                             'api-gateway': params.API_GATEWAY_BRANCH,
                             'config-server': params.CONFIG_SERVER_BRANCH,
@@ -58,61 +42,77 @@ pipeline {
                             'discovery-server': params.DISCOVERY_SERVER_BRANCH,
                             'genai-service': params.GENAI_SERVICE_BRANCH,
                             'vets-service': params.VETS_SERVICE_BRANCH,
-                            'visits-service': params.VETS_SERVICE_BRANCH
+                            'visits-service': params.VISITS_SERVICE_BRANCH
                         ]
-                        def helmSet = ''
-                        def updatedServices = []
+                        def helmSetArgs = []
+                        def servicesWithNodePort = [] // To track which services were set to NodePort
 
-                        services.each { serviceName, branch ->
+                        servicesToUpdate.each { serviceName, branch ->
                             if (branch != 'main') {
-                                def commitHash = sh(script: "git ls-remote https://github.com/spring-petclinic/spring-petclinic-microservices ${branch} | head -1 | cut -f1", returnStdout: true).trim()
+                                echo "Processing ${serviceName} with branch ${branch}"
+                                
+                                def commitHashCmd = "git ls-remote https://github.com/spring-petclinic/spring-petclinic-microservices refs/heads/${branch} | head -1 | cut -f1"
+                                def commitHash = sh(script: commitHashCmd, returnStdout: true).trim()
+
                                 if (!commitHash) {
-                                    error "Branch ${branch} not found for ${serviceName}."
+                                    error "Failed to get commit hash for branch '${branch}' for service '${serviceName}'. Branch might not exist or repo is private."
                                 }
                                 def tag = commitHash.substring(0, 7)
-                                def fullImageName = "spring-petclinic-${serviceName}"
-                                sh "docker pull ${DOCKER_REGISTRY}/${fullImageName}:${tag}"
-                                helmSet += "services.${serviceName}.image.repository=${fullImageName},services.${serviceName}.image.tag=${tag},"
-                                updatedServices << serviceName
+                                def imageName = "spring-petclinic-${serviceName}" 
+                                
+                                helmSetArgs.add("--set services.${serviceName}.image.repository=${DOCKER_REGISTRY_USERNAME}/${imageName}")
+                                helmSetArgs.add("--set services.${serviceName}.image.tag=${tag}")
+                                
+                                if (serviceName == 'vets-service') { 
+                                    helmSetArgs.add("--set services.${serviceName}.serviceType=NodePort")
+                                    servicesWithNodePort.add(serviceName)
+                                }
                             }
                         }
-
-                        if (!helmSet.isEmpty()) {
-                            helmSet = helmSet.substring(0, helmSet.length() - 1)
-                            helmSet += ",global.namespace=dev-review"
-                            sh """
-                            helm dependency update DA02-HelmRepo/${HELM_CHART}
-                            helm upgrade --install $HELM_RELEASE_NAME DA02-HelmRepo/${HELM_CHART} \
-                                --set ${helmSet} \
-                                --namespace dev-review \
-                                --kubeconfig=\$KUBECONFIG \
-                                --kube-context gke_thanh-devops_us-central1-a_petclinic
-                            """
-                            updatedServices.each { service ->
-                                sh """
-                                kubectl patch service ${service} -n dev-review --type='json' -p='[{"op": "replace", "path": "/spec/type", "value": "NodePort"}]' --kubeconfig=\$KUBECONFIG
-                                """
-                            }
-                        } else {
-                            echo "No services with non-main branches to deploy."
+                        
+                        def chartPath = "./${HELM_CHART_DIR_NAME}" 
+                        // Always set global namespace if deploying. If no specific branches, this will apply namespace to default deployment.
+                        helmSetArgs.add("--set global.namespace=${TARGET_NAMESPACE}")
+                        if (helmSetArgs.size() == 1 && helmSetArgs[0] == "--set global.namespace=${TARGET_NAMESPACE}") { // Only namespace arg means no specific service updates
+                             echo "No specific service branches provided. Deploying with chart defaults for namespace ${TARGET_NAMESPACE}."
                         }
+                        
+                        sh "helm dependency update ${chartPath}"
 
-                        if (!updatedServices.isEmpty()) {
-                            echo "Deployment completed. Use the following NodePort endpoints to test:"
-                            updatedServices.each { service ->
-                                def nodePort = sh(script: "kubectl get service ${service} -n dev-review -o jsonpath='{.spec.ports[0].nodePort}' --kubeconfig=\$KUBECONFIG", returnStdout: true).trim()
+                        def helmCommand = "helm upgrade --install ${HELM_RELEASE_NAME} ${chartPath} --namespace ${TARGET_NAMESPACE} --kubeconfig=\$KUBECONFIG --kube-context ${KUBE_CONTEXT}"
+                        if (!helmSetArgs.isEmpty()) {
+                            helmCommand += " " + helmSetArgs.join(" ")
+                        }
+                        
+                        sh helmCommand
+
+                        if (!servicesWithNodePort.isEmpty()) {
+                            echo "Deployment completed. For services set to NodePort, use the following endpoints to test:"
+                            servicesWithNodePort.each { service ->
+                                // Assuming service port 8083 for vets-service for specific NodePort lookup.
+                                // For a generic solution, you'd need to know each service's port.
+                                def servicePortForJsonPath = (service == 'vets-service') ? "8083" : "" 
+                                def nodePortJsonPath = ""
+                                if (servicePortForJsonPath) {
+                                    nodePortJsonPath = "{.spec.ports[?(@.port==${servicePortForJsonPath})].nodePort}"
+                                } else {
+                                    nodePortJsonPath = "{.spec.ports[0].nodePort}" // Fallback if service port isn't specifically known
+                                }
+
+
+                                def nodePort = sh(script: "kubectl get service ${service} -n ${TARGET_NAMESPACE} -o jsonpath='${nodePortJsonPath}' --kubeconfig=\$KUBECONFIG --kube-context ${KUBE_CONTEXT}", returnStdout: true).trim()
                                 if (nodePort) {
-                                    def nodeIp = sh(script: "kubectl get nodes -o jsonpath='{.items[0].status.addresses[?(@.type==\"ExternalIP\")].address}' --kubeconfig=\$KUBECONFIG", returnStdout: true).trim()
+                                    def nodeIp = sh(script: "kubectl get nodes -o jsonpath='{.items[0].status.addresses[?(@.type==\"ExternalIP\")].address}' --kubeconfig=\$KUBECONFIG --kube-context ${KUBE_CONTEXT}", returnStdout: true).trim()
                                     if (!nodeIp) {
-                                        nodeIp = sh(script: "kubectl get nodes -o jsonpath='{.items[0].status.addresses[?(@.type==\"InternalIP\")].address}' --kubeconfig=\$KUBECONFIG", returnStdout: true).trim()
+                                        nodeIp = sh(script: "kubectl get nodes -o jsonpath='{.items[0].status.addresses[?(@.type==\"InternalIP\")].address}' --kubeconfig=\$KUBECONFIG --kube-context ${KUBE_CONTEXT}", returnStdout: true).trim()
                                     }
                                     if (nodeIp) {
-                                        echo "Service: ${service} - Endpoint: ${nodeIp}:${nodePort}"
+                                        echo "Service: ${service} - Endpoint: http://${nodeIp}:${nodePort}"
                                     } else {
-                                        echo "Service: ${service} - No node IP available. Check GKE node configuration."
+                                        echo "Service: ${service} - NodePort ${nodePort}. No node IP available. Check GKE node configuration."
                                     }
                                 } else {
-                                    echo "Service: ${service} - Failed to assign NodePort. Ensure cluster allows dynamic NodePort allocation."
+                                    echo "Service: ${service} - Failed to get NodePort. Ensure chart sets type to NodePort and cluster allows dynamic NodePort allocation."
                                 }
                             }
                         }
@@ -123,15 +123,9 @@ pipeline {
     }
     post {
         always {
-            sh 'docker logout'
+            dir(HELM_CHART_DIR_NAME) { 
+                sh "echo 'Cleaning up ${HELM_CHART_DIR_NAME}' && rm -rf ." 
+            }
         }
     }
-}
-
-// Example buildAndPushService function (assuming it's defined elsewhere or needs implementation)
-def buildAndPushService(service) {
-    sh """
-        docker build -t ${DOCKER_REGISTRY}/${service}:${env.IMAGE_TAG} -f Dockerfile.${service} .
-        docker push ${DOCKER_REGISTRY}/${service}:${env.IMAGE_TAG}
-    """
 }
