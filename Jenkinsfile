@@ -1,234 +1,178 @@
-// Jenkinsfile
 pipeline {
     agent any
 
     environment {
         DOCKER_REGISTRY = "docker.io"
         DOCKER_REPOSITORY = "vuhoabinhthachhoa"
-        GIT_COMMIT_SHORT = sh(script: "git rev-parse --short HEAD", returnStdout: true).trim()
         HELM_REPO_URL = "https://github.com/OpsInUs/DA02-HelmRepo.git"
         HELM_REPO_BRANCH = "main"
     }
 
     stages {
-        stage('Determine Environment and Tag') {
-    steps {
-        script {
-            // Add debug info
-            echo "BRANCH_NAME: ${env.BRANCH_NAME}"
-            echo "GIT_BRANCH: ${env.GIT_BRANCH}"
-            
-            // Check current branch another way
-            sh "git branch --show-current"
-            sh "git rev-parse --abbrev-ref HEAD"
-            
-            // Check if this is a tagged commit
-            def isTagged = sh(script: "git tag --points-at HEAD || echo ''", returnStdout: true).trim()
-            
-            // Detect branch more reliably
-            def currentBranch = sh(script: "git rev-parse --abbrev-ref HEAD", returnStdout: true).trim()
-            
-            if (isTagged) {
-                // Tagged commit = staging environment
-                env.TARGET_ENV = 'staging'
-                env.IMAGE_TAG = isTagged
-                echo "Tagged commit detected: ${isTagged}. Targeting staging environment."
-            } else if (currentBranch == 'main' || currentBranch == 'master' || env.BRANCH_NAME == 'main' || env.BRANCH_NAME == 'origin/main' || env.GIT_BRANCH == 'main' || env.GIT_BRANCH == 'origin/main') {
-                // Main branch without tag = dev environment
-                env.TARGET_ENV = 'dev'
-                env.IMAGE_TAG = 'latest'
-                echo "Main branch commit detected. Targeting dev environment."
-            } else {
-                // Other branch = dev-review
-                env.TARGET_ENV = 'dev-review'
-                env.IMAGE_TAG = env.GIT_COMMIT_SHORT
-                echo "Feature branch commit detected. Targeting dev-review environment."
-            }
-            
-            echo "Selected environment: ${env.TARGET_ENV} with image tag: ${env.IMAGE_TAG}"
-        }
-    }
-}
-
-        stage('Determine Changed Services') {
+        stage('Initialize') {
             steps {
                 script {
-                    // Determine the base commit to compare with
-                    def baseCommit = ""
-                    try {
-                        if (env.BRANCH_NAME == 'main' || env.BRANCH_NAME == 'origin/main') {
-                            // For main branch, compare with the previous commit
-                            baseCommit = sh(script: "git rev-parse HEAD~1", returnStdout: true).trim()
-                        } else {
-                            // For feature branches, compare with the main branch
-                            baseCommit = sh(script: "git merge-base origin/main HEAD || git rev-parse HEAD~1", returnStdout: true).trim()
-                        }
-
-                        // Get list of changed files
-                        def changedFiles = sh(script: "git diff --name-only ${baseCommit} HEAD", returnStdout: true).trim()
-                        
-                        // Check which services have changed
-                        def services = ['spring-petclinic-admin-server', 
-                                       'spring-petclinic-api-gateway', 
-                                       'spring-petclinic-config-server',
-                                       'spring-petclinic-customers-service',
-                                       'spring-petclinic-discovery-server',
-                                       'spring-petclinic-genai-service',
-                                       'spring-petclinic-vets-service',
-                                       'spring-petclinic-visits-service']
-                        
-                        def changedServices = []
-                        def changedFilesList = changedFiles.split('\n')
-                        echo "Changed files: ${changedFilesList}"
-
-                        services.each { service ->
-                            // Check if any file path starts with the service name
-                            if (changedFilesList.any { file -> file.startsWith(service) }) {
-                                changedServices.add(service)
-                                echo "Service detected as changed: ${service}"
-                            }
-                        }
-                        
-                        // If no services have changed, build all (could be a shared dependency)
-                        if (changedServices.size() == 0) {
-                            changedServices = services
-                            echo "No specific services changed. Building all services."
-                        }
-                        
-                        // Store as a comma-separated string and also keep the list
-                        env.CHANGED_SERVICES = changedServices.join(',')
-                        // Store in a global variable to avoid issues with env variables
-                        SERVICES_TO_BUILD = changedServices
-                        
-                        echo "Services to build: ${env.CHANGED_SERVICES}"
-                    } catch (Exception e) {
-                        echo "Error detecting changed services: ${e.message}. Building all services."
-                        def services = ['spring-petclinic-admin-server', 
-                                       'spring-petclinic-api-gateway', 
-                                       'spring-petclinic-config-server',
-                                       'spring-petclinic-customers-service',
-                                       'spring-petclinic-discovery-server',
-                                       'spring-petclinic-genai-service',
-                                       'spring-petclinic-vets-service',
-                                       'spring-petclinic-visits-service']
-                        env.CHANGED_SERVICES = services.join(',')
-                        SERVICES_TO_BUILD = services
+                    env.GIT_COMMIT_SHORT = sh(script: "git rev-parse --short HEAD", returnStdout: true).trim()
+                    env.CURRENT_BRANCH = sh(script: "git rev-parse --abbrev-ref HEAD", returnStdout: true).trim()
+                    
+                    def tagName = sh(script: "git tag --points-at HEAD 2>/dev/null | head -1 || echo ''", returnStdout: true).trim()
+                    
+                    if (tagName) {
+                        env.TARGET_ENV = 'staging'
+                        env.IMAGE_TAG = tagName
+                    } else if (env.CURRENT_BRANCH == 'main' || env.CURRENT_BRANCH == 'master') {
+                        env.TARGET_ENV = 'dev'
+                        env.IMAGE_TAG = 'latest'
+                    } else {
+                        env.TARGET_ENV = 'dev-review'
+                        env.IMAGE_TAG = env.GIT_COMMIT_SHORT
                     }
+                    
+                    echo "Branch: ${env.CURRENT_BRANCH} | Environment: ${env.TARGET_ENV} | Tag: ${env.IMAGE_TAG}"
                 }
             }
         }
 
-        stage('Build and Push Docker Images') {
+        stage('Detect Changed Services') {
             steps {
                 script {
-                    // Use the global variable instead of splitting env.CHANGED_SERVICES again
-                    def services = SERVICES_TO_BUILD ?: []
+                    def services = [
+                        'spring-petclinic-admin-server',
+                        'spring-petclinic-api-gateway', 
+                        'spring-petclinic-config-server',
+                        'spring-petclinic-customers-service',
+                        'spring-petclinic-discovery-server',
+                        'spring-petclinic-genai-service',
+                        'spring-petclinic-vets-service',
+                        'spring-petclinic-visits-service'
+                    ]
                     
-                    if (services.isEmpty()) {
-                        echo "No services to build. Skipping Docker build stage."
-                        return
-                    }
+                    def changedServices = []
                     
                     try {
-                        withCredentials([string(credentialsId: 'docker-hub-token', variable: 'DOCKER_HUB_TOKEN')]) {
-                            // Use single quotes for better security
-                            sh '''
-                                echo "${DOCKER_HUB_TOKEN}" | docker login -u ${DOCKER_REPOSITORY} --password-stdin ${DOCKER_REGISTRY}
-                            '''
-                        }
+                        def changedFiles = sh(
+                            script: "git diff --name-only HEAD~1 HEAD",
+                            returnStdout: true
+                        ).trim()
                         
-                        services.each { service ->
-                            echo "Building ${service} for ${env.TARGET_ENV} environment with tag: ${env.IMAGE_TAG}"
+                        if (changedFiles) {
+                            def changedFilesList = changedFiles.split('\n')
+                            echo "Changed files: ${changedFilesList.join(', ')}"
                             
-                            // Build with Maven
-                            dir(service) {
-                                // Check for Maven wrapper and make it executable
-                                def mvnwExists = sh(script: "test -f ./mvnw && echo 'yes' || echo 'no'", returnStdout: true).trim()
-                                def mvnwParentExists = sh(script: "test -f ../mvnw && echo 'yes' || echo 'no'", returnStdout: true).trim()
-                                
-                                if (mvnwExists == 'yes') {
-                                    sh "chmod +x ./mvnw"
-                                    sh "./mvnw clean package -DskipTests"
-                                } else if (mvnwParentExists == 'yes') {
-                                    sh "chmod +x ../mvnw"
-                                    sh "../mvnw clean package -DskipTests"
-                                } else {
-                                    sh "mvn clean package -DskipTests"
+                            services.each { service ->
+                                def serviceChanged = changedFilesList.any { file -> 
+                                    file.contains(service) || file.startsWith("${service}/")
                                 }
-                                
-                                // Verify JAR was created
-                                sh "ls -la target/ || echo 'Target directory not found'"
-                                
-                                // Build Docker image with appropriate tag
-                                sh """
-                                docker build \\
-                                    -t ${DOCKER_REPOSITORY}/${service}:${env.IMAGE_TAG} \\
-                                    -f ../docker/Dockerfile \\
-                                    --build-arg ARTIFACT_NAME=target/${service}-3.4.1 \\
-                                    --build-arg EXPOSED_PORT=8080 . || exit 1
-
-                                docker push ${DOCKER_REPOSITORY}/${service}:${env.IMAGE_TAG} || exit 1
-                                """
+                                if (serviceChanged) {
+                                    changedServices.add(service)
+                                }
+                            }
+                            
+                            // Check for shared changes
+                            def hasSharedChanges = changedFilesList.any { file ->
+                                file == 'pom.xml' ||
+                                file.startsWith('docker/') ||
+                                file == 'Dockerfile' ||
+                                file == 'Jenkinsfile'
+                            }
+                            
+                            if (hasSharedChanges && changedServices.isEmpty()) {
+                                changedServices = services
                             }
                         }
+                        
                     } catch (Exception e) {
-                        echo "Error in Docker build stage: ${e.message}"
-                        throw e
+                        echo "Error detecting changes: ${e.message}"
+                        changedServices = services
+                    }
+                    
+                    if (changedServices.isEmpty()) {
+                        changedServices = services
+                    }
+                    
+                    env.CHANGED_SERVICES = changedServices.join(',')
+                    echo "Services to build: ${changedServices.join(', ')}"
+                }
+            }
+        }
+
+        stage('Build and Push Images') {
+            steps {
+                script {
+                    def servicesToBuild = env.CHANGED_SERVICES.split(',')
+                    
+                    withCredentials([string(credentialsId: 'docker-hub-token', variable: 'DOCKER_HUB_TOKEN')]) {
+                        sh 'echo "${DOCKER_HUB_TOKEN}" | docker login -u ${DOCKER_REPOSITORY} --password-stdin ${DOCKER_REGISTRY}'
+                    }
+                    
+                    servicesToBuild.each { service ->
+                        echo "Building ${service}"
+                        
+                        dir(service) {
+                            def mvnCmd = fileExists('./mvnw') ? './mvnw' : (fileExists('../mvnw') ? '../mvnw' : 'mvn')
+                            if (mvnCmd.contains('mvnw')) {
+                                sh "chmod +x ${mvnCmd}"
+                            }
+                            
+                            sh "${mvnCmd} clean package -DskipTests -q"
+                            
+                            def imageName = "${env.DOCKER_REPOSITORY}/${service}:${env.IMAGE_TAG}"
+                            sh """
+                                docker build -t ${imageName} -f ../docker/Dockerfile \\
+                                    --build-arg ARTIFACT_NAME=target/${service}-3.4.1 \\
+                                    --build-arg EXPOSED_PORT=8080 .
+                                docker push ${imageName}
+                            """
+                            echo "Built and pushed: ${imageName}"
+                        }
                     }
                 }
             }
         }
 
-        stage('Update Helm Values') {
+        stage('Update Helm Repository') {
             steps {
                 script {
-                    // For public repositories, we don't need SSH keys for cloning
                     sh """
-                        # Clone the public Helm repository
-                        git clone ${HELM_REPO_URL} helm-repo
-                        cd helm-repo
+                        rm -rf helm-repo
+                        git clone ${env.HELM_REPO_URL} helm-repo
+                        cd helm-repo && git checkout ${env.HELM_REPO_BRANCH}
                     """
                     
-                    // Make sure the directory structure exists
                     sh "mkdir -p helm-repo/env/${env.TARGET_ENV}"
                     
-                    // Debug - list what we have
-                    sh "ls -la helm-repo/env/"
+                    def servicesToUpdate = env.CHANGED_SERVICES.split(',')
                     
-                    // Update the appropriate environment's values.yaml file
-                    def services = env.CHANGED_SERVICES.split(',')
-                    services.each { service ->
-                        // Convert from service dir name to helm service name
+                    servicesToUpdate.each { service ->
                         def helmServiceName = service.replace('spring-petclinic-', '')
                         
-                        // Check if the yq tool is available
-                        sh "which yq || echo 'YQ not found'"
+                        def yqAvailable = sh(script: "which yq >/dev/null 2>&1", returnStatus: true) == 0
                         
-                        // Update image tag in values file using yq
-                        sh """
-                            # Update image tag in the target environment's values file
-                            yq e -i '.services.${helmServiceName}.image.tag = "${env.IMAGE_TAG}"' helm-repo/env/${env.TARGET_ENV}/values.yaml || echo "YQ command failed - ensure yq is installed"
-                        """
+                        if (yqAvailable) {
+                            sh """
+                                cd helm-repo
+                                yq eval -i '.services.${helmServiceName}.image.tag = "${env.IMAGE_TAG}"' env/${env.TARGET_ENV}/values.yaml
+                            """
+                        } else {
+                            sh """
+                                cd helm-repo
+                                sed -i '/services:/,/^[[:space:]]*${helmServiceName}:/,/^[[:space:]]*image:/,/^[[:space:]]*tag:/ s/tag:.*/tag: "${env.IMAGE_TAG}"/' env/${env.TARGET_ENV}/values.yaml
+                            """
+                        }
                     }
                     
-                    // For pushing changes, we still need credentials
                     withCredentials([usernamePassword(credentialsId: 'github-credentials', usernameVariable: 'GIT_USERNAME', passwordVariable: 'GIT_PASSWORD')]) {
                         sh """
                             cd helm-repo
-                            git config --global user.email "htkt004@gmail.com"
-                            git config --global user.name "Tuyen572004"
+                            git config user.email "htkt004@gmail.com"
+                            git config user.name "Tuyen572004"
                             
-                            # Configure git to use https with credentials
-                            git config credential.helper store
-                            echo "https://${GIT_USERNAME}:${GIT_PASSWORD}@github.com" > ~/.git-credentials
-                            
-                            # Add, commit, and push changes
-                            git add env/${env.TARGET_ENV}/values.yaml
-                            git commit -m "Update ${env.TARGET_ENV} environment with ${env.IMAGE_TAG} tag for ${env.CHANGED_SERVICES}" || echo "No changes to commit"
-                            git push origin ${HELM_REPO_BRANCH}
-                            
-                            # Remove credentials file for security
-                            rm ~/.git-credentials
+                            if ! git diff --quiet; then
+                                git add env/${env.TARGET_ENV}/values.yaml
+                                git commit -m "Update ${env.TARGET_ENV}: ${env.CHANGED_SERVICES} to ${env.IMAGE_TAG}"
+                                git push https://${GIT_USERNAME}:${GIT_PASSWORD}@github.com/OpsInUs/DA02-HelmRepo.git ${env.HELM_REPO_BRANCH}
+                                echo "Helm values updated"
+                            fi
                         """
                     }
                 }
@@ -238,17 +182,9 @@ pipeline {
 
     post {
         always {
-            script {
-                try {
-                    // Safe cleanup operations
-                    echo "Running cleanup tasks..."
-                    sh 'docker system prune -f || true'  // The '|| true' makes it continue even if this command fails
-                    cleanWs()  // Clean workspace
-                } catch (Exception e) {
-                    echo "Warning: Cleanup tasks encountered an issue: ${e.message}"
-                    // Continue without failing the build
-                }
-            }
+            sh 'docker system prune -f || true'
+            sh 'rm -rf helm-repo || true'
+            cleanWs()
         }
     }
 }
