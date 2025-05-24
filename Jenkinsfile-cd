@@ -17,6 +17,7 @@ pipeline {
         DOCKER_REGISTRY_USERNAME = 'vuhoabinhthachhoa'
         KUBE_CONTEXT = 'gke_thanh-devops_us-central1-a_petclinic'
         TARGET_NAMESPACE = 'dev-review'
+        PATH = 
     }
     stages {
        stage('Clone Helm Repository via HTTPS') { // Stage name updated for clarity
@@ -28,12 +29,34 @@ pipeline {
                 extensions: [[$class: 'RelativeTargetDirectory', relativeTargetDir: HELM_CHART_DIR_NAME]]
             ])
          }
-		    }
+        }
+
+        stage('Verify Tools') {
+            steps {
+                sh 'echo $PATH'
+                sh 'which gcloud'
+                sh 'which git'
+                sh 'which helm'
+                sh 'which docker'
+                sh 'which kubectl'
+                sh 'which gke-gcloud-auth-plugin'
+            }
+        }
+
+        stage('Test Gcloud Auth') {
+            steps {
+                sh 'gcloud auth list'
+                sh 'gcloud container clusters list'
+                    }
+                }
 
         stage('Deploy to Kubernetes') {
             steps {
                 withCredentials([file(credentialsId: 'kubeconfig', variable: 'KUBECONFIG')]) {
                     script {
+                        sh 'cat $KUBECONFIG' // Debug: Check the content
+                        sh 'kubectl version --kubeconfig=$KUBECONFIG' // Test kubectl authentication
+
                         def servicesToUpdate = [
                             'admin-server': params.ADMIN_SERVER_BRANCH,
                             'api-gateway': params.API_GATEWAY_BRANCH,
