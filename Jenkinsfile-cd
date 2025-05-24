@@ -17,7 +17,6 @@ pipeline {
         DOCKER_REGISTRY_USERNAME = 'vuhoabinhthachhoa'
         KUBE_CONTEXT = 'gke_thanh-devops_us-central1-a_petclinic'
         TARGET_NAMESPACE = 'dev-review'
-        PATH = 
     }
     stages {
        stage('Clone Helm Repository via HTTPS') { // Stage name updated for clarity
