@@ -78,8 +78,12 @@ pipeline {
                                        'spring-petclinic-visits-service']
                         
                         def changedServices = []
+                        def changedFilesList = changedFiles.split('\n')
+                        echo "Changed files: ${changedFilesList}"
+
                         services.each { service ->
-                            if (changedFiles.contains(service)) {
+                            // Check if any file path starts with the service name
+                            if (changedFilesList.any { file -> file.startsWith(service) }) {
                                 changedServices.add(service)
                                 echo "Service detected as changed: ${service}"
                             }
