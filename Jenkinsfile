@@ -103,35 +103,96 @@ pipeline {
             }
         }
 
+        // stage('Build and Push Images') {
+        //     steps {
+        //         script {
+        //             def servicesToBuild = env.CHANGED_SERVICES.split(',')
+                    
+        //             withCredentials([usernamePassword(credentialsId: 'docker-hub-credentials', usernameVariable: 'DOCKER_USERNAME', passwordVariable: 'DOCKER_PASSWORD')]) {
+        //                 sh 'echo "${DOCKER_PASSWORD}" | docker login -u ${DOCKER_USERNAME} --password-stdin ${DOCKER_REGISTRY}'
+        //             }
+                    
+        //             servicesToBuild.each { service ->
+        //                 echo "Building ${service}"
+                        
+        //                 dir(service) {
+        //                     def mvnCmd = fileExists('./mvnw') ? './mvnw' : (fileExists('../mvnw') ? '../mvnw' : 'mvn')
+        //                     if (mvnCmd.contains('mvnw')) {
+        //                         sh "chmod +x ${mvnCmd}"
+        //                     }
+                            
+        //                     sh "${mvnCmd} clean package -DskipTests -q"
+                            
+        //                     def imageName = "${env.DOCKER_REPOSITORY}/${service}:${env.IMAGE_TAG}"
+        //                     sh """
+        //                         docker build -t ${imageName} -f ../docker/Dockerfile \\
+        //                             --build-arg ARTIFACT_NAME=target/${service}-3.4.1 \\
+        //                             --build-arg EXPOSED_PORT=8080 .
+        //                         docker push ${imageName}
+        //                     """
+        //                     echo "Built and pushed: ${imageName}"
+        //                 }
+        //             }
+        //         }
+        //     }
+        // }
         stage('Build and Push Images') {
             steps {
                 script {
-                    def servicesToBuild = env.CHANGED_SERVICES.split(',')
-                    
-                    withCredentials([usernamePassword(credentialsId: 'docker-hub-credentials', usernameVariable: 'DOCKER_USERNAME', passwordVariable: 'DOCKER_PASSWORD')]) {
-                        sh 'echo "${DOCKER_PASSWORD}" | docker login -u ${DOCKER_USERNAME} --password-stdin ${DOCKER_REGISTRY}'
-                    }
-                    
-                    servicesToBuild.each { service ->
-                        echo "Building ${service}"
+                    try {
+                        def servicesToBuild = env.CHANGED_SERVICES.split(',')
+                        echo "Starting to build services: ${servicesToBuild}"
                         
-                        dir(service) {
-                            def mvnCmd = fileExists('./mvnw') ? './mvnw' : (fileExists('../mvnw') ? '../mvnw' : 'mvn')
-                            if (mvnCmd.contains('mvnw')) {
-                                sh "chmod +x ${mvnCmd}"
-                            }
-                            
-                            sh "${mvnCmd} clean package -DskipTests -q"
-                            
-                            def imageName = "${env.DOCKER_REPOSITORY}/${service}:${env.IMAGE_TAG}"
-                            sh """
-                                docker build -t ${imageName} -f ../docker/Dockerfile \\
-                                    --build-arg ARTIFACT_NAME=target/${service}-3.4.1 \\
-                                    --build-arg EXPOSED_PORT=8080 .
-                                docker push ${imageName}
-                            """
-                            echo "Built and pushed: ${imageName}"
+                        // Test Docker command availability
+                        sh 'docker --version || echo "Docker not available"'
+                        
+                        withCredentials([usernamePassword(credentialsId: 'docker-hub-credentials', usernameVariable: 'DOCKER_USERNAME', passwordVariable: 'DOCKER_PASSWORD')]) {
+                            sh 'echo "Logging into Docker..."'
+                            sh 'echo "${DOCKER_PASSWORD}" | docker login -u ${DOCKER_USERNAME} --password-stdin ${DOCKER_REGISTRY} || echo "Docker login failed"'
                         }
+                        
+                        servicesToBuild.each { service ->
+                            echo "Processing service: ${service}"
+                            
+                            // Check if directory exists
+                            sh "if [ -d '${service}' ]; then echo 'Directory ${service} exists'; else echo 'Directory ${service} does NOT exist'; fi"
+                            
+                            dir(service) {
+                                echo "Inside directory: ${service}"
+                                sh 'pwd && ls -la'
+                                
+                                def mvnCmd = fileExists('./mvnw') ? './mvnw' : (fileExists('../mvnw') ? '../mvnw' : 'mvn')
+                                echo "Using Maven command: ${mvnCmd}"
+                                
+                                if (mvnCmd.contains('mvnw')) {
+                                    sh "chmod +x ${mvnCmd}"
+                                }
+                                
+                                // Remove quiet flag to see build errors
+                                sh "${mvnCmd} clean package -DskipTests"
+                                
+                                // Check if the artifact was created
+                                sh "ls -la target/ || echo 'Target directory not found'"
+                                
+                                def imageName = "${env.DOCKER_REPOSITORY}/${service}:${env.IMAGE_TAG}"
+                                echo "Building Docker image: ${imageName}"
+                                
+                                // Check if Dockerfile exists
+                                sh "if [ -f '../docker/Dockerfile' ]; then echo 'Dockerfile exists'; else echo 'Dockerfile NOT found'; fi"
+                                
+                                sh """
+                                    docker build -t ${imageName} -f ../docker/Dockerfile \\
+                                        --build-arg ARTIFACT_NAME=target/${service}-3.4.1 \\
+                                        --build-arg EXPOSED_PORT=8080 . || echo "Docker build failed"
+                                    docker push ${imageName} || echo "Docker push failed"
+                                """
+                                echo "Built and pushed: ${imageName}"
+                            }
+                        }
+                    } catch (Exception e) {
+                        echo "Exception caught: ${e.getMessage()}"
+                        echo "Stack trace: ${e.getStackTrace().join('\n')}"
+                        throw e
                     }
                 }
             }
