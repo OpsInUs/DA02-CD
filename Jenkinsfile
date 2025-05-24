@@ -146,10 +146,12 @@ pipeline {
                         // Test Docker command availability
                         sh 'docker --version || echo "Docker not available"'
                         
-                        withCredentials([string(credentialsId: 'docker-hub-token', usernameVariable: 'DOCKER_USERNAME', variable: 'DOCKER_TOKEN')]) {
-                    sh 'echo "Logging into Docker..."'
-                    sh 'echo "${DOCKER_PASSWORD}" | docker login -u ${DOCKER_USERNAME} --password-stdin ${DOCKER_REGISTRY}'
-                }
+                        withCredentials([string(credentialsId: 'docker-hub-token', variable: 'DOCKER_HUB_TOKEN')]) {
+                            // Use single quotes for better security
+                            sh '''
+                                echo "${DOCKER_HUB_TOKEN}" | docker login -u ${DOCKER_REPOSITORY} --password-stdin ${DOCKER_REGISTRY}
+                            '''
+                        }
                         
                         servicesToBuild.each { service ->
                             echo "Processing service: ${service}"
