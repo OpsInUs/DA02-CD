@@ -42,19 +42,19 @@ pipeline {
             }
         }
 
-        stage('Test Gcloud Auth') {
+        stage ("getting the WIF config file into a variable")
+        {
             steps {
-                withCredentials([file(credentialsId: 'gcloud-config', variable: 'GCLOUD_CONFIG')]) {
-                    // Unzip if it's a .zip file, then copy contents
-                    sh '''
-                        mkdir -p ~/.config/gcloud
-                        unzip -o $GCLOUD_CONFIG -d /tmp/gcloud-config
-                        cp -r /tmp/gcloud-config/* ~/.config/gcloud/
-                        rm -rf /tmp/gcloud-config
-                    '''
-                    sh 'gcloud container clusters list'
+                     withCredentials([file(credentialsId: 'wif-config-file', variable: 'WIF')]) 
+                        {
+                         sh '''
+                            gcloud auth login --brief --cred-file=$WIF --quiet
+                            gcloud container clusters list
+                            gcloud compute instances list
+                            '''
+
+                        }
                 }
-            }
         }
         
         stage('Deploy to Kubernetes') {
