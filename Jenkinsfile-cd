@@ -17,52 +17,104 @@ pipeline {
         DOCKER_REGISTRY_USERNAME = 'vuhoabinhthachhoa'
         KUBE_CONTEXT = 'gke_thanh-devops_us-central1-a_petclinic'
         TARGET_NAMESPACE = 'dev-review'
+
+        // Define your GCP and WIF details
+        GCP_PROJECT_ID        = 'thanh-devops'
+        GCP_PROJECT_NUMBER    = '321371933596'
+        WIF_POOL_ID           = 'jenkins-oidc-pool'
+        WIF_PROVIDER_ID       = 'jenkins-provider'
+        GCP_SERVICE_ACCOUNT   = 'jenkins-wif-executor-sa@thanh-devops.iam.gserviceaccount.com'
+        JENKINS_OIDC_CRED_ID  = 'jenkins-gcp-oidc-token'
+
+        // Construct the Audience for the WIF credential file
+        GCP_WIF_AUDIENCE      = "//iam.googleapis.com/projects/${GCP_PROJECT_NUMBER}/locations/global/workloadIdentityPools/${WIF_POOL_ID}/providers/${WIF_PROVIDER_ID}"
     }
     stages {
-       stage('Clone Helm Repository via HTTPS') { // Stage name updated for clarity
-        steps {
-            checkout([
-                $class: 'GitSCM',
-                branches: [[name: '*/main']], // Or the specific branch of your Helm repo
-                userRemoteConfigs: [[url: HELM_REPO_HTTPS_URL]], // Only the URL is needed
-                extensions: [[$class: 'RelativeTargetDirectory', relativeTargetDir: HELM_CHART_DIR_NAME]]
-            ])
-         }
+        stage('Clone Helm Repository via HTTPS') {
+            steps {
+                checkout([
+                    $class: 'GitSCM',
+                    branches: [[name: '*/main']],
+                    userRemoteConfigs: [[url: HELM_REPO_HTTPS_URL]],
+                    extensions: [[$class: 'RelativeTargetDirectory', relativeTargetDir: HELM_CHART_DIR_NAME]]
+                ])
+            }
         }
 
         stage('Verify Tools') {
             steps {
-                sh 'echo $PATH'
-                sh 'which gcloud'
-                sh 'which git'
-                sh 'which helm'
-                sh 'which docker'
-                sh 'which kubectl'
-                sh 'which gke-gcloud-auth-plugin'
+                sh 'echo "PATH: $PATH"'
+                sh 'which gcloud || echo "gcloud not found"'
+                sh 'which git || echo "git not found"'
+                sh 'which helm || echo "helm not found"'
+                sh 'which docker || echo "docker not found"'
+                sh 'which kubectl || echo "kubectl not found"'
+                sh 'which gke-gcloud-auth-plugin || echo "gke-gcloud-auth-plugin not found"'
             }
         }
-
-        stage ("getting the WIF config file into a variable")
-        {
-            steps {
-                     withCredentials([file(credentialsId: 'wif-config-file', variable: 'WIF')]) 
-                        {
-                         sh '''
-                            gcloud auth login --brief --cred-file=$WIF --quiet
-                            gcloud container clusters list
-                            gcloud compute instances list
-                            '''
-
-                        }
-                }
-        }
         
-        stage('Deploy to Kubernetes') {
+        stage('Deploy to Kubernetes using WIF') {
             steps {
-                withCredentials([file(credentialsId: 'kubeconfig', variable: 'KUBECONFIG')]) {
+                withCredentials([
+                    file(variable: 'ID_TOKEN_FILE_VAR', credentialsId: JENKINS_OIDC_CRED_ID), // Renamed to avoid direct interpolation issues if possible
+                    file(credentialsId: 'kubeconfig', variable: 'KUBECONFIG_FILE_PATH')
+                ]) {
                     script {
-                        sh 'cat $KUBECONFIG' // Debug: Check the content
-                        sh 'kubectl version --kubeconfig=$KUBECONFIG' // Test kubectl authentication
+                        // Assign to a local Groovy variable to handle potential interpolation warnings more easily
+                        def idTokenFilePath = ID_TOKEN_FILE_VAR 
+
+                        echo "Jenkins OIDC Token file path is in ID_TOKEN_FILE_VAR variable."
+                        echo "Target GCP Audience for WIF config: ${GCP_WIF_AUDIENCE}"
+                        echo "Service Account to impersonate: ${GCP_SERVICE_ACCOUNT}"
+
+                        // Escape backslashes in file paths for JSON, especially if Jenkins might run on Windows agents
+                        def jsonSafeIdTokenPath = idTokenFilePath.replace('\\', '\\\\')
+
+                        def wifCredsJson = """
+                        {
+                          "type": "external_account",
+                          "audience": "${GCP_WIF_AUDIENCE}",
+                          "subject_token_type": "urn:ietf:params:oauth:token-type:jwt",
+                          "token_url": "https://sts.googleapis.com/v1/token",
+                          "service_account_impersonation_url": "https://iamcredentials.googleapis.com/v1/projects/-/serviceAccounts/${GCP_SERVICE_ACCOUNT}:generateAccessToken",
+                          "credential_source": {
+                            "file": "${jsonSafeIdTokenPath}",
+                            "format": {
+                              "type": "text"
+                            }
+                          }
+                        }
+                        """
+                        def wifConfigFileInWorkspace = "${WORKSPACE}/gcp_oidc_wif_config.json"
+                        writeFile file: wifConfigFileInWorkspace, text: wifCredsJson
+                        echo "Generated WIF config file at: ${wifConfigFileInWorkspace}"
+
+                        def tempGcloudConfigDir = "${WORKSPACE}/.gcloud_temp_config_jenkins_oidc_deploy"
+
+                        sh """
+                            export CLOUDSDK_CONFIG=${tempGcloudConfigDir}
+                            mkdir -p \${CLOUDSDK_CONFIG}
+                            echo "Using temporary gcloud config directory: \${CLOUDSDK_CONFIG}"
+
+                            echo "Attempting gcloud login using WIF credential file..."
+                            gcloud auth login --brief --cred-file=${wifConfigFileInWorkspace} --quiet
+
+                            echo "--- gcloud auth list (after WIF login) ---"
+                            gcloud auth list
+                            echo "------------------------------------------"
+                            
+                            echo "Successfully authenticated with GCP for deployment (default project not set in gcloud config for this session)!"
+                            echo "Running an example GCP command (listing GKE clusters, explicitly providing project ${GCP_PROJECT_ID})..."
+                            gcloud container clusters list --project=${GCP_PROJECT_ID} || echo "Failed to list GKE clusters. Check command, permissions, and ensure issuer is reachable."
+                        """
+                        // End of WIF Authentication specific script block
+
+                        // --- Start of your original deployment logic ---
+                        env.KUBECONFIG = KUBECONFIG_FILE_PATH 
+
+                        echo "Using Kubeconfig from Jenkins credentials. Path is stored in KUBECONFIG_FILE_PATH."
+                        sh 'echo "Kubeconfig content (first 10 lines):"; head -n 10 $KUBECONFIG'
+                        sh 'kubectl version --client && kubectl version' // Check client and attempt server connection
 
                         def servicesToUpdate = [
                             'admin-server': params.ADMIN_SERVER_BRANCH,
@@ -75,7 +127,7 @@ pipeline {
                             'visits-service': params.VISITS_SERVICE_BRANCH
                         ]
                         def helmSetArgs = []
-                        def servicesWithNodePort = [] // To track which services were set to NodePort
+                        def servicesWithNodePort = []
 
                         servicesToUpdate.each { serviceName, branch ->
                             if (branch != 'main') {
@@ -101,15 +153,14 @@ pipeline {
                         }
                         
                         def chartPath = "./${HELM_CHART_DIR_NAME}" 
-                        // Always set global namespace if deploying. If no specific branches, this will apply namespace to default deployment.
                         helmSetArgs.add("--set global.namespace=${TARGET_NAMESPACE}")
-                        if (helmSetArgs.size() == 1 && helmSetArgs[0] == "--set global.namespace=${TARGET_NAMESPACE}") { // Only namespace arg means no specific service updates
+                        if (helmSetArgs.size() == 1 && helmSetArgs[0] == "--set global.namespace=${TARGET_NAMESPACE}") {
                              echo "No specific service branches provided. Deploying with chart defaults for namespace ${TARGET_NAMESPACE}."
                         }
                         
                         sh "helm dependency update ${chartPath}"
 
-                        def helmCommand = "helm upgrade --install ${HELM_RELEASE_NAME} ${chartPath} --namespace ${TARGET_NAMESPACE} --kubeconfig=\$KUBECONFIG --kube-context ${KUBE_CONTEXT}"
+                        def helmCommand = "helm upgrade --install ${HELM_RELEASE_NAME} ${chartPath} --namespace ${TARGET_NAMESPACE} --kube-context ${KUBE_CONTEXT}"
                         if (!helmSetArgs.isEmpty()) {
                             helmCommand += " " + helmSetArgs.join(" ")
                         }
@@ -119,22 +170,19 @@ pipeline {
                         if (!servicesWithNodePort.isEmpty()) {
                             echo "Deployment completed. For services set to NodePort, use the following endpoints to test:"
                             servicesWithNodePort.each { service ->
-                                // Assuming service port 8083 for vets-service for specific NodePort lookup.
-                                // For a generic solution, you'd need to know each service's port.
                                 def servicePortForJsonPath = (service == 'vets-service') ? "8083" : "" 
                                 def nodePortJsonPath = ""
                                 if (servicePortForJsonPath) {
                                     nodePortJsonPath = "{.spec.ports[?(@.port==${servicePortForJsonPath})].nodePort}"
                                 } else {
-                                    nodePortJsonPath = "{.spec.ports[0].nodePort}" // Fallback if service port isn't specifically known
+                                    nodePortJsonPath = "{.spec.ports[0].nodePort}"
                                 }
 
-
-                                def nodePort = sh(script: "kubectl get service ${service} -n ${TARGET_NAMESPACE} -o jsonpath='${nodePortJsonPath}' --kubeconfig=\$KUBECONFIG --kube-context ${KUBE_CONTEXT}", returnStdout: true).trim()
+                                def nodePort = sh(script: "kubectl get service ${service} -n ${TARGET_NAMESPACE} -o jsonpath='${nodePortJsonPath}' --context ${KUBE_CONTEXT}", returnStdout: true).trim()
                                 if (nodePort) {
-                                    def nodeIp = sh(script: "kubectl get nodes -o jsonpath='{.items[0].status.addresses[?(@.type==\"ExternalIP\")].address}' --kubeconfig=\$KUBECONFIG --kube-context ${KUBE_CONTEXT}", returnStdout: true).trim()
+                                    def nodeIp = sh(script: "kubectl get nodes -o jsonpath='{.items[0].status.addresses[?(@.type==\"ExternalIP\")].address}' --context ${KUBE_CONTEXT}", returnStdout: true).trim()
                                     if (!nodeIp) {
-                                        nodeIp = sh(script: "kubectl get nodes -o jsonpath='{.items[0].status.addresses[?(@.type==\"InternalIP\")].address}' --kubeconfig=\$KUBECONFIG --kube-context ${KUBE_CONTEXT}", returnStdout: true).trim()
+                                        nodeIp = sh(script: "kubectl get nodes -o jsonpath='{.items[0].status.addresses[?(@.type==\"InternalIP\")].address}' --context ${KUBE_CONTEXT}", returnStdout: true).trim()
                                     }
                                     if (nodeIp) {
                                         echo "Service: ${service} - Endpoint: http://${nodeIp}:${nodePort}"
@@ -146,6 +194,13 @@ pipeline {
                                 }
                             }
                         }
+                        // --- End of your original deployment logic ---
+                        
+                        sh """
+                            echo "Cleaning up WIF temporary files from deploy stage..."
+                            rm -f ${wifConfigFileInWorkspace}
+                            rm -rf ${tempGcloudConfigDir}
+                        """
                     }
                 }
             }
@@ -153,8 +208,22 @@ pipeline {
     }
     post {
         always {
+            // General cleanup
             dir(HELM_CHART_DIR_NAME) { 
                 sh "echo 'Cleaning up ${HELM_CHART_DIR_NAME}' && rm -rf ." 
+            }
+            // Additional cleanup for WIF files if not caught in the stage
+            script {
+                def wifConfigFileInWorkspace = "${WORKSPACE}/gcp_oidc_wif_config.json"
+                if (fileExists(wifConfigFileInWorkspace)) {
+                    echo "Post-build: Cleaning up WIF config file: ${wifConfigFileInWorkspace}"
+                    sh "rm -f ${wifConfigFileInWorkspace}"
+                }
+                def tempGcloudConfigDir = "${WORKSPACE}/.gcloud_temp_config_jenkins_oidc_deploy"
+                 if (fileExists(tempGcloudConfigDir)) {
+                    echo "Post-build: Cleaning up temporary gcloud config directory: ${tempGcloudConfigDir}"
+                    sh "rm -rf ${tempGcloudConfigDir}"
+                }
             }
         }
     }
