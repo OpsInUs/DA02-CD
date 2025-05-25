@@ -167,7 +167,7 @@ pipeline {
         stage('Update Helm Repository') {
             steps {
                 script {
-                    if(!tagName) {
+                    if(!env.TAG_NAME) {
                         echo "No tag found, skipping Helm repository update."
                         return
                     }
