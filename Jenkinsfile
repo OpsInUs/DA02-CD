@@ -103,48 +103,12 @@ pipeline {
             }
         }
 
-        // stage('Build and Push Images') {
-        //     steps {
-        //         script {
-        //             def servicesToBuild = env.CHANGED_SERVICES.split(',')
-                    
-        //             withCredentials([usernamePassword(credentialsId: 'docker-hub-token', usernameVariable: 'DOCKER_USERNAME', passwordVariable: 'DOCKER_PASSWORD')]) {
-        //                 sh 'echo "${DOCKER_PASSWORD}" | docker login -u ${DOCKER_USERNAME} --password-stdin ${DOCKER_REGISTRY}'
-        //             }
-                    
-        //             servicesToBuild.each { service ->
-        //                 echo "Building ${service}"
-                        
-        //                 dir(service) {
-        //                     def mvnCmd = fileExists('./mvnw') ? './mvnw' : (fileExists('../mvnw') ? '../mvnw' : 'mvn')
-        //                     if (mvnCmd.contains('mvnw')) {
-        //                         sh "chmod +x ${mvnCmd}"
-        //                     }
-                            
-        //                     sh "${mvnCmd} clean package -DskipTests -q"
-                            
-        //                     def imageName = "${env.DOCKER_REPOSITORY}/${service}:${env.IMAGE_TAG}"
-        //                     sh """
-        //                         docker build -t ${imageName} -f ../docker/Dockerfile \\
-        //                             --build-arg ARTIFACT_NAME=target/${service}-3.4.1 \\
-        //                             --build-arg EXPOSED_PORT=8080 .
-        //                         docker push ${imageName}
-        //                     """
-        //                     echo "Built and pushed: ${imageName}"
-        //                 }
-        //             }
-        //         }
-        //     }
-        // }
         stage('Build and Push Images') {
             steps {
                 script {
                     try {
                         def servicesToBuild = env.CHANGED_SERVICES.split(',')
                         echo "Starting to build services: ${servicesToBuild}"
-                        
-                        // Test Docker command availability
-                        sh 'docker --version || echo "Docker not available"'
                         
                         withCredentials([string(credentialsId: 'docker-hub-token', variable: 'DOCKER_HUB_TOKEN')]) {
                             // Use single quotes for better security
@@ -203,6 +167,10 @@ pipeline {
         stage('Update Helm Repository') {
             steps {
                 script {
+                    if(!tagName) {
+                        echo "No tag found, skipping Helm repository update."
+                        return
+                    }
                     sh """
                         rm -rf helm-repo
                         git clone ${env.HELM_REPO_URL} helm-repo
