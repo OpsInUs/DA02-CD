@@ -122,7 +122,7 @@ pipeline {
                             sh "helm dependency update"
                         }
 
-                        def helmCommand = "helm upgrade --install ${HELM_RELEASE_NAME} ${chartPath} --namespace ${TARGET_NAMESPACE} --debug --wait"
+                        def helmCommand = "helm upgrade --install ${HELM_RELEASE_NAME} ${chartPath} --namespace ${TARGET_NAMESPACE} --debug"
                         if (!helmSetArgs.isEmpty()) {
                             helmCommand += " " + helmSetArgs.join(" ")
                         }
