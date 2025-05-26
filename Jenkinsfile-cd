@@ -140,25 +140,63 @@ pipeline {
                         if (!servicesWithNodePort.isEmpty()) {
                             echo "Services deployed with NodePort (due to non-main branch selection): ${servicesWithNodePort.join(', ')}"
                             servicesWithNodePort.each { service ->
-                                def serviceK8sName = service // Assuming Helm chart service name matches
-                                // Attempt to get any TCP port's nodePort, more robust if specific port isn't always first
-                                def nodePortJsonPath = "{.spec.ports[?(@.protocol=='TCP')].nodePort}"
-
-                                def nodePortOutput = sh(script: "kubectl get service ${serviceK8sName} -n ${TARGET_NAMESPACE} -o jsonpath='${nodePortJsonPath}'", returnStdout: true).trim()
-                                def nodePort = nodePortOutput.split(' ')[0] // Take the first nodePort if multiple are returned
-
-                                if (nodePort) {
-                                    def nodeIp = sh(script: "kubectl get nodes -o jsonpath='{.items[0].status.addresses[?(@.type==\"ExternalIP\")].address}'", returnStdout: true).trim()
-                                    if (!nodeIp) {
-                                        nodeIp = sh(script: "kubectl get nodes -o jsonpath='{.items[0].status.addresses[?(@.type==\"InternalIP\")].address}'", returnStdout: true).trim()
+                                // Convert service name to match Helm chart naming convention
+                                
+                                echo "Looking for service: ${service}"
+                                
+                                // First verify the service exists
+                                def serviceExists = sh(
+                                    script: "kubectl get service ${service} -n ${TARGET_NAMESPACE} --no-headers 2>/dev/null | wc -l", 
+                                    returnStdout: true
+                                ).trim()
+                                
+                                if (serviceExists == "0") {
+                                    echo "Service: ${service} - Service not found in namespace ${TARGET_NAMESPACE}"
+                                    return
+                                }
+                                
+                                // Get service type to verify it's actually NodePort
+                                def serviceType = sh(
+                                    script: "kubectl get service ${service} -n ${TARGET_NAMESPACE} -o jsonpath='{.spec.type}'", 
+                                    returnStdout: true
+                                ).trim()
+                                
+                                if (serviceType != "NodePort") {
+                                    echo "Service: ${service} - Service type is ${serviceType}, not NodePort"
+                                    return
+                                }
+                                
+                                // Get the first TCP port's nodePort
+                                def nodePortOutput = sh(
+                                    script: "kubectl get service ${service} -n ${TARGET_NAMESPACE} -o jsonpath='{.spec.ports[0].nodePort}'", 
+                                    returnStdout: true
+                                ).trim()
+                                
+                                if (nodePortOutput && nodePortOutput != "null" && nodePortOutput.isNumber()) {
+                                    def nodePort = nodePortOutput
+                                    
+                                    // Get node IP - try external IP first, then internal IP
+                                    def nodeIp = sh(
+                                        script: "kubectl get nodes -o jsonpath='{.items[0].status.addresses[?(@.type==\"ExternalIP\")].address}'", 
+                                        returnStdout: true
+                                    ).trim()
+                                    
+                                    if (!nodeIp || nodeIp == "null") {
+                                        nodeIp = sh(
+                                            script: "kubectl get nodes -o jsonpath='{.items[0].status.addresses[?(@.type==\"InternalIP\")].address}'", 
+                                            returnStdout: true
+                                        ).trim()
                                     }
-                                    if (nodeIp) {
-                                        echo "Service: ${serviceK8sName} - NodePort Endpoint: http://${nodeIp}:${nodePort}"
+                                    
+                                    if (nodeIp && nodeIp != "null") {
+                                        echo "✅ Service: ${service} - NodePort Endpoint: http://${nodeIp}:${nodePort}"
                                     } else {
-                                        echo "Service: ${serviceK8sName} - NodePort ${nodePort}. Could not determine GKE Node External/Internal IP."
+                                        echo "⚠️  Service: ${service} - NodePort ${nodePort} available, but could not determine node IP"
                                     }
                                 } else {
-                                    echo "Service: ${serviceK8sName} - Failed to get NodePort. Ensure it's exposed as NodePort in the chart and cluster allows NodePorts."
+                                    echo "❌ Service: ${service} - No valid NodePort found. Output was: '${nodePortOutput}'"
+                                    // Debug: show the service details
+                                    sh "kubectl describe service ${service} -n ${TARGET_NAMESPACE}"
                                 }
                             }
                         }
