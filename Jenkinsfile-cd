@@ -27,7 +27,7 @@ pipeline {
         TARGET_NAMESPACE          = 'dev-review'
 
 
-        JENKINS_HOST_CRED_ID = 'jenkins-host' // The ID of your Secret text credential
+        JENKINS_HOST = 'https://1de5-14-224-172-48.ngrok-free.app' 
         TARGET_JOB_NAME = 'clean-up-cd'
     }
 
@@ -204,18 +204,16 @@ pipeline {
 
         stage('Display Job Trigger Link') {
             steps {
-                withCredentials([string(credentialsId: 'jenkins-host', variable: 'JENKINS_HOST_URL_FROM_CRED')]) {
-                    script {
+                script {
                         // Construct the trigger link
                         // For a simple trigger (no parameters, immediate build):
-                        def triggerLinkSimple = "${JENKINS_HOST_URL_FROM_CRED}/job/${TARGET_JOB_NAME}/build"
+                        def triggerLinkSimple = "${JENKINS_HOST}/job/${TARGET_JOB_NAME}/build"
                         
                         echo "To trigger the '${TARGET_JOB_NAME}' job (simple build):"
                         echo "${triggerLinkSimple}"
                         echo "-----------------------------------------------------------------"
                         
                     }
-                }
             }
         }
         
