@@ -204,7 +204,7 @@ pipeline {
 
         stage('Display Job Trigger Link') {
             steps {
-                withCredentials([string(credentialsId: JENKINS_HOST_CRED_ID, variable: 'JENKINS_HOST_URL_FROM_CRED')]) {
+                withCredentials([string(credentialsId: 'jenkins-host', variable: 'JENKINS_HOST_URL_FROM_CRED')]) {
                     script {
                         // Construct the trigger link
                         // For a simple trigger (no parameters, immediate build):
