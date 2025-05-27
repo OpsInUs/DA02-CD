@@ -62,6 +62,22 @@ pipeline {
                     }
                     echo "Using KUBECONFIG: ${env.KUBECONFIG} for Helm deployment."
 
+                    sh """
+                      if ! kubectl get namespace ${TARGET_NAMESPACE}; then
+                        echo "Namespace ${TARGET_NAMESPACE} does not exist. Creating it..."
+                        kubectl create namespace ${TARGET_NAMESPACE}
+                      else
+                        echo "Namespace ${TARGET_NAMESPACE} already exists. Skipping creation."
+                      fi
+                    
+                      echo "Labeling and annotating namespace ${TARGET_NAMESPACE} for Helm ownership..."
+                      kubectl label namespace ${TARGET_NAMESPACE} app.kubernetes.io/managed-by=Helm --overwrite
+                      kubectl annotate namespace ${TARGET_NAMESPACE} \\
+                        meta.helm.sh/release-name=${HELM_RELEASE_NAME} \\
+                        meta.helm.sh/release-namespace=${TARGET_NAMESPACE} --overwrite
+                    """
+
+
                     try {
                         def servicesToUpdate = [
                             'admin-server': params.ADMIN_SERVER_BRANCH,
