@@ -26,18 +26,9 @@ pipeline {
         DOCKER_REGISTRY_USERNAME  = 'vuhoabinhthachhoa'
         TARGET_NAMESPACE          = 'dev-review'
 
-        // GKE Cluster details
-        GKE_CLUSTER_NAME          = 'petclinic' // YOUR GKE CLUSTER NAME
-        GKE_CLUSTER_LOCATION      = 'us-central1-a' // YOUR GKE CLUSTER ZONE/REGION
 
-        // GCP WIF details
-        GCP_PROJECT_ID            = 'thanh-devops'
-        GCP_PROJECT_NUMBER        = '321371933596'
-        WIF_POOL_ID               = 'jenkins-oidc-pool'
-        WIF_PROVIDER_ID           = 'jenkins-provider'
-        GCP_SERVICE_ACCOUNT       = 'jenkins-wif-executor-sa@thanh-devops.iam.gserviceaccount.com'
-        JENKINS_OIDC_CRED_ID      = 'jenkins-gcp-oidc-token'
-        GCP_WIF_AUDIENCE          = "//iam.googleapis.com/projects/${GCP_PROJECT_NUMBER}/locations/global/workloadIdentityPools/${WIF_POOL_ID}/providers/${WIF_PROVIDER_ID}"
+        JENKINS_HOST_CRED_ID = 'jenkins-host' // The ID of your Secret text credential
+        TARGET_JOB_NAME = 'clean-up-cd'
     }
 
     stages {
@@ -210,6 +201,24 @@ pipeline {
                 }
             }
         }
+
+        stage('Display Job Trigger Link') {
+            steps {
+                withCredentials([string(credentialsId: JENKINS_HOST_CRED_ID, variable: 'JENKINS_HOST_URL_FROM_CRED')]) {
+                    script {
+                        // Construct the trigger link
+                        // For a simple trigger (no parameters, immediate build):
+                        def triggerLinkSimple = "${JENKINS_HOST_URL_FROM_CRED}/job/${TARGET_JOB_NAME}/build"
+                        
+                        echo "To trigger the '${TARGET_JOB_NAME}' job (simple build):"
+                        echo "${triggerLinkSimple}"
+                        echo "-----------------------------------------------------------------"
+                        
+                    }
+                }
+            }
+        }
+        
     } // End stages
 
     post {
@@ -219,20 +228,6 @@ pipeline {
                 dir(HELM_CHART_REPO_DIR_NAME) {
                     echo "Cleaning up ./${HELM_CHART_REPO_DIR_NAME}"
                     deleteDir()
-                }
-
-                // WIF and gcloud temp files cleanup
-                if (env.WIF_CONFIG_FILE && fileExists(env.WIF_CONFIG_FILE)) {
-                    echo "Cleaning up WIF config file: ${env.WIF_CONFIG_FILE}"
-                    sh "rm -f ${env.WIF_CONFIG_FILE}"
-                }
-                if (env.TEMP_GCLOUD_CONFIG_DIR && fileExists(env.TEMP_GCLOUD_CONFIG_DIR)) {
-                    echo "Cleaning up gcloud temp config dir: ${env.TEMP_GCLOUD_CONFIG_DIR}"
-                    sh "rm -rf ${env.TEMP_GCLOUD_CONFIG_DIR}"
-                }
-                if (env.TEMP_KUBECONFIG_FILE && fileExists(env.TEMP_KUBECONFIG_FILE)) {
-                    echo "Cleaning up temp kubeconfig: ${env.TEMP_KUBECONFIG_FILE}"
-                    sh "rm -f ${env.TEMP_KUBECONFIG_FILE}"
                 }
             }
         }
