@@ -54,6 +54,7 @@
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-tracing</artifactId>
+            <version>${spring-boot-admin.version}</version>
         </dependency>
 
         <!-- Third-party librairies -->
