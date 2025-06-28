@@ -1,16 +1,13 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <configuration>
     <include resource="org/springframework/boot/logging/logback/base.xml"/>
-    <!-- Required for Loglevel management into the Spring Petclinic Admin Server-->
     <jmxConfigurator/>
-
-    <!-- Get service name from Spring -->
+    
     <springProperty scope="context" name="app" source="spring.application.name"/>
-
-    <!-- CONSOLE appender for kubectl logs -->
+    
     <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
         <encoder>
-            <pattern>%d{HH:mm:ss.SSS} [%X{traceId:-},%X{spanId:-}] %-5level %logger{36} - %msg%n</pattern>
+            <pattern>%d{yyyy-MM-dd HH:mm:ss.SSS} %5p [${app:-%X{spring.application.name:-}},%X{traceId:-},%X{spanId:-}] ${PID:- } --- [%15.15t] %-40.40logger{39} : %m%n</pattern>
         </encoder>
     </appender>
 
@@ -21,25 +18,26 @@
         <format>
             <label>
                 <pattern>
-                app=${app:-unknown},
-                host=${HOSTNAME:-unknown},
-                level=%level
+                app = ${app:-unknown},
+                host = ${HOSTNAME:-unknown}
                 </pattern>
                 <structuredMetadataPattern>
-                    thread=%thread,
-                    class=%logger{20},
-                    traceId=%X{traceId:-none},
-                    spanId=%X{spanId:-none}
+                level = %level,
+                thread = %thread,
+                class = %logger,
+                traceId = %mdc{traceId:-none},
+                spanId = %X{spanId:-none},
+                pid = ${PID:-none}
                 </structuredMetadataPattern>
             </label>
             <message>
-                <pattern>%d{yyyy-MM-dd HH:mm:ss.SSS} [%X{traceId:-},%X{spanId:-}] %-5level %logger{36} - %msg%n</pattern>
+                <pattern>%d{yyyy-MM-dd HH:mm:ss.SSS} %5p [${app:-%X{spring.application.name:-}},%X{traceId:-},%X{spanId:-}] ${PID:- } --- [%15.15t] %-40.40logger{39} : %m%n</pattern>
             </message>
         </format>
     </appender>
 
     <root level="INFO">
-        <appender-ref ref="CONSOLE"/> 
-        <appender-ref ref="LOKI"/>    
+        <appender-ref ref="CONSOLE"/>
+        <appender-ref ref="LOKI"/>
     </root>
 </configuration>
