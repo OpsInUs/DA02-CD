@@ -14,21 +14,14 @@ pipeline {
 
     environment {
         HELM_RELEASE_NAME         = 'petclinic'
-        HELM_CHART_REPO_DIR_NAME  = 'DA02-HelmRepo' // Directory where the Helm chart Git repo is cloned
+        HELM_CHART_REPO_DIR_NAME  = 'DA02-HelmRepo'
         HELM_REPO_HTTPS_URL       = 'https://github.com/OpsInUs/DA02-HelmRepo.git'
-        // *** IMPORTANT: ADJUST THIS PATH IF YOUR CHART IS IN A SUBDIRECTORY OF THE REPO ***
-        // This assumes your Helm chart named 'petclinic' is in a directory 'petclinic'
-        // at the root of the HELM_CHART_REPO_DIR_NAME checkout.
-        // If the chart itself is the root of HELM_CHART_REPO_DIR_NAME, then LOCAL_CHART_PATH should be HELM_CHART_REPO_DIR_NAME
-        LOCAL_CHART_PATH          = "${env.HELM_CHART_REPO_DIR_NAME}" 
-
-        SERVICES_CD_REPO_URL      = 'https://github.com/OpsInUs/DA02-CD.git' // Repo for service source code to get commit IDs
+        LOCAL_CHART_PATH          = "${env.HELM_CHART_REPO_DIR_NAME}"
+        SERVICES_CD_REPO_URL      = 'https://github.com/OpsInUs/DA02-CD.git'
         DOCKER_REGISTRY_USERNAME  = 'vuhoabinhthachhoa'
         TARGET_NAMESPACE          = 'dev-review'
-
-
-        JENKINS_HOST = 'https://cda5-115-74-192-50.ngrok-free.app' 
-        TARGET_JOB_NAME = 'clean-up-cd'
+        JENKINS_HOST             = 'https://cda5-115-74-192-50.ngrok-free.app'
+        TARGET_JOB_NAME          = 'clean-up-cd'
     }
 
     stages {
@@ -56,7 +49,6 @@ pipeline {
         stage('Deploy/Upgrade Petclinic with Helm') {
             steps {
                 script {
-                    // KUBECONFIG should be set from the previous stage
                     if (!env.KUBECONFIG || !fileExists(env.KUBECONFIG)) {
                         error "KUBECONFIG is not set or file does not exist. Authentication stage might have failed."
                     }
@@ -64,19 +56,13 @@ pipeline {
 
                     sh """
                       if ! kubectl get namespace ${TARGET_NAMESPACE}; then
-                        echo "Namespace ${TARGET_NAMESPACE} does not exist. Creating it..."
                         kubectl create namespace ${TARGET_NAMESPACE}
-                      else
-                        echo "Namespace ${TARGET_NAMESPACE} already exists. Skipping creation."
                       fi
-                    
-                      echo "Labeling and annotating namespace ${TARGET_NAMESPACE} for Helm ownership..."
                       kubectl label namespace ${TARGET_NAMESPACE} app.kubernetes.io/managed-by=Helm --overwrite
                       kubectl annotate namespace ${TARGET_NAMESPACE} \\
                         meta.helm.sh/release-name=${HELM_RELEASE_NAME} \\
                         meta.helm.sh/release-namespace=${TARGET_NAMESPACE} --overwrite
                     """
-
 
                     try {
                         def servicesToUpdate = [
@@ -90,129 +76,59 @@ pipeline {
                             'visits-service': params.VISITS_SERVICE_BRANCH
                         ]
                         def helmSetArgs = []
-                        def servicesWithNodePort = [] // Keep track of services set to NodePort
+                        def servicesWithNodePort = []
 
+                        // First add base image paths for ALL services
                         servicesToUpdate.each { serviceName, branch ->
+                            def imageName = "spring-petclinic-${serviceName}"
+                            helmSetArgs.add("--set services.\"${serviceName}\".image.repository=docker.io/${DOCKER_REGISTRY_USERNAME}/${imageName}")
+                            
                             if (branch != 'main' && branch.trim() != '') {
                                 echo "Processing ${serviceName} with branch ${branch}"
-                                
-                                // Get commit hash from the SERVICES_CD_REPO_URL
-                                def commitHashCmd = "git ls-remote ${SERVICES_CD_REPO_URL} refs/heads/${branch} | head -1 | cut -f1"
-                                def commitHash = sh(script: commitHashCmd, returnStdout: true).trim()
-
+                                def commitHash = sh(script: "git ls-remote ${SERVICES_CD_REPO_URL} refs/heads/${branch} | head -1 | cut -f1", returnStdout: true).trim()
                                 if (!commitHash) {
-                                    error "Failed to get commit hash for branch '${branch}' of service '${serviceName}' from ${SERVICES_CD_REPO_URL}."
+                                    error "Failed to get commit hash for branch '${branch}' of service '${serviceName}'"
                                 }
                                 def tag = commitHash.substring(0, 7)
-                                def imageName = "spring-petclinic-${serviceName}" // Assuming image name convention
-                                
-                                helmSetArgs.add("--set services.\"${serviceName}\".image.repository=${DOCKER_REGISTRY_USERNAME}/${imageName}")
                                 helmSetArgs.add("--set services.\"${serviceName}\".image.tag=${tag}")
-                                helmSetArgs.add("--set services.\"${serviceName}\".serviceType=NodePort") // Set to NodePort if branch isn't main
+                                helmSetArgs.add("--set services.\"${serviceName}\".serviceType=NodePort")
                                 servicesWithNodePort.add(serviceName)
                             } else {
-                                echo "Skipping image override for ${serviceName} as branch is 'main' or empty. It will use chart defaults or values from previous deployments for serviceType."
-                                // If you want to ensure it's ClusterIP if main, you'd add:
-                                // helmSetArgs.add("--set services.\"${serviceName}\".serviceType=ClusterIP")
+                                helmSetArgs.add("--set services.\"${serviceName}\".image.tag=latest")
                             }
                         }
                         
-                        def chartPath = "./${LOCAL_CHART_PATH}" // Relative to workspace
-                        helmSetArgs.add("--set global.namespace=${TARGET_NAMESPACE}") // Always set the target namespace globally
-                        
-                        if (helmSetArgs.size() == 1 && helmSetArgs[0] == "--set global.namespace=${TARGET_NAMESPACE}") {
-                             echo "No service-specific branches provided (or all were 'main'). Deploying with chart defaults for images and service types, but targeting namespace ${TARGET_NAMESPACE}."
-                        }
-                        
-                        // Run helm dependency update in the chart's directory
-                        dir(chartPath) {
+                        helmSetArgs.add("--set global.namespace=${TARGET_NAMESPACE}")
+
+                        dir("./${LOCAL_CHART_PATH}") {
                             sh "helm dependency update"
                         }
 
-                        def helmCommand = "helm upgrade --install ${HELM_RELEASE_NAME} ${chartPath} --namespace ${TARGET_NAMESPACE} --debug"
-                        if (!helmSetArgs.isEmpty()) {
-                            helmCommand += " " + helmSetArgs.join(" ")
-                        }
-                        
+                        def helmCommand = "helm upgrade --install ${HELM_RELEASE_NAME} ./${LOCAL_CHART_PATH} --namespace ${TARGET_NAMESPACE} --debug ${helmSetArgs.join(' ')}"
                         sh helmCommand
 
                         // Verification steps
-                        echo "Deployment for ${HELM_RELEASE_NAME} completed. Verifying status..."
-                        sh 'sleep 30' // Allow some time for resources to settle
+                        echo "Verifying deployment..."
+                        sh 'sleep 30'
                         sh "helm status ${HELM_RELEASE_NAME} -n ${TARGET_NAMESPACE}"
-                        sh "kubectl get deployments -n ${TARGET_NAMESPACE} -l app.kubernetes.io/instance=${HELM_RELEASE_NAME}"
-                        sh "kubectl get services -n ${TARGET_NAMESPACE} -l app.kubernetes.io/instance=${HELM_RELEASE_NAME}"
-                        sh "kubectl get pods -n ${TARGET_NAMESPACE} -l app.kubernetes.io/instance=${HELM_RELEASE_NAME}"
+                        sh "kubectl get deployments,services,pods -n ${TARGET_NAMESPACE} -l app.kubernetes.io/instance=${HELM_RELEASE_NAME}"
 
                         if (!servicesWithNodePort.isEmpty()) {
-                            echo "Services deployed with NodePort (due to non-main branch selection): ${servicesWithNodePort.join(', ')}"
+                            echo "Services with NodePort: ${servicesWithNodePort.join(', ')}"
                             servicesWithNodePort.each { service ->
-                                // Convert service name to match Helm chart naming convention
-                                
-                                echo "Looking for service: ${service}"
-                                
-                                // First verify the service exists
-                                def serviceExists = sh(
-                                    script: "kubectl get service ${service} -n ${TARGET_NAMESPACE} --no-headers 2>/dev/null | wc -l", 
-                                    returnStdout: true
-                                ).trim()
-                                
-                                if (serviceExists == "0") {
-                                    echo "Service: ${service} - Service not found in namespace ${TARGET_NAMESPACE}"
-                                    return
-                                }
-                                
-                                // Get service type to verify it's actually NodePort
-                                def serviceType = sh(
-                                    script: "kubectl get service ${service} -n ${TARGET_NAMESPACE} -o jsonpath='{.spec.type}'", 
-                                    returnStdout: true
-                                ).trim()
-                                
-                                if (serviceType != "NodePort") {
-                                    echo "Service: ${service} - Service type is ${serviceType}, not NodePort"
-                                    return
-                                }
-                                
-                                // Get the first TCP port's nodePort
-                                def nodePortOutput = sh(
-                                    script: "kubectl get service ${service} -n ${TARGET_NAMESPACE} -o jsonpath='{.spec.ports[0].nodePort}'", 
-                                    returnStdout: true
-                                ).trim()
-                                
-                                if (nodePortOutput && nodePortOutput != "null" && nodePortOutput.isNumber()) {
-                                    def nodePort = nodePortOutput
-                                    
-                                    // Get node IP - try external IP first, then internal IP
-                                    def nodeIp = sh(
-                                        script: "kubectl get nodes -o jsonpath='{.items[0].status.addresses[?(@.type==\"ExternalIP\")].address}'", 
-                                        returnStdout: true
-                                    ).trim()
-                                    
-                                    if (!nodeIp || nodeIp == "null") {
-                                        nodeIp = sh(
-                                            script: "kubectl get nodes -o jsonpath='{.items[0].status.addresses[?(@.type==\"InternalIP\")].address}'", 
-                                            returnStdout: true
-                                        ).trim()
+                                def nodePort = sh(script: "kubectl get service ${service} -n ${TARGET_NAMESPACE} -o jsonpath='{.spec.ports[0].nodePort}'", returnStdout: true).trim()
+                                if (nodePort?.isNumber()) {
+                                    def nodeIp = sh(script: "kubectl get nodes -o jsonpath='{.items[0].status.addresses[?(@.type==\"ExternalIP\")].address}'", returnStdout: true).trim() ?:
+                                                sh(script: "kubectl get nodes -o jsonpath='{.items[0].status.addresses[?(@.type==\"InternalIP\")].address}'", returnStdout: true).trim()
+                                    if (nodeIp) {
+                                        echo "✅ ${service} NodePort: http://${nodeIp}:${nodePort}"
                                     }
-                                    
-                                    if (nodeIp && nodeIp != "null") {
-                                        echo "✅ Service: ${service} - NodePort Endpoint: http://${nodeIp}:${nodePort}"
-                                    } else {
-                                        echo "⚠️  Service: ${service} - NodePort ${nodePort} available, but could not determine node IP"
-                                    }
-                                } else {
-                                    echo "❌ Service: ${service} - No valid NodePort found. Output was: '${nodePortOutput}'"
-                                    // Debug: show the service details
-                                    sh "kubectl describe service ${service} -n ${TARGET_NAMESPACE}"
                                 }
                             }
                         }
 
                     } catch (Exception e) {
-                        echo "Error during Helm deploy/upgrade for ${HELM_RELEASE_NAME}: ${e.getMessage()}"
-                        sh "helm status ${HELM_RELEASE_NAME} -n ${TARGET_NAMESPACE} || echo 'Helm status failed or release not found.'"
-                        sh "kubectl get events -n ${TARGET_NAMESPACE} --sort-by=.metadata.creationTimestamp | tail -n 30 || echo 'Failed to get k8s events.'"
-                        error "Failed to deploy/upgrade ${HELM_RELEASE_NAME} application."
+                        error "Deployment failed: ${e.getMessage()}"
                     }
                 }
             }
@@ -221,28 +137,16 @@ pipeline {
         stage('Display Job Trigger Link') {
             steps {
                 script {
-                        // Construct the trigger link
-                        // For a simple trigger (no parameters, immediate build):
-                        def triggerLinkSimple = "${JENKINS_HOST}/job/${TARGET_JOB_NAME}/build"
-                        
-                        echo "To trigger the '${TARGET_JOB_NAME}' job (simple build):"
-                        echo "${triggerLinkSimple}"
-                        echo "-----------------------------------------------------------------"
-                        
-                    }
+                    echo "Cleanup job: ${JENKINS_HOST}/job/${TARGET_JOB_NAME}/build"
+                }
             }
         }
-        
-    } // End stages
+    }
 
     post {
         always {
-            script {
-                echo "Post-build cleanup..."
-                dir(HELM_CHART_REPO_DIR_NAME) {
-                    echo "Cleaning up ./${HELM_CHART_REPO_DIR_NAME}"
-                    deleteDir()
-                }
+            dir(HELM_CHART_REPO_DIR_NAME) {
+                deleteDir()
             }
         }
     }
