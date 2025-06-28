@@ -7,7 +7,6 @@ pipeline {
         string(name: 'CONFIG_SERVER_BRANCH', defaultValue: 'main', description: 'Branch for spring-petclinic-config-server')
         string(name: 'CUSTOMERS_SERVICE_BRANCH', defaultValue: 'main', description: 'Branch for spring-petclinic-customers-service')
         string(name: 'DISCOVERY_SERVER_BRANCH', defaultValue: 'main', description: 'Branch for spring-petclinic-discovery-server')
-        string(name: 'GENAI_SERVICE_BRANCH', defaultValue: 'main', description: 'Branch for spring-petclinic-genai-service')
         string(name: 'VETS_SERVICE_BRANCH', defaultValue: 'main', description: 'Branch for spring-petclinic-vets-service')
         string(name: 'VISITS_SERVICE_BRANCH', defaultValue: 'main', description: 'Branch for spring-petclinic-visits-service')
     }
@@ -71,7 +70,6 @@ pipeline {
                             'config-server': params.CONFIG_SERVER_BRANCH,
                             'customers-service': params.CUSTOMERS_SERVICE_BRANCH,
                             'discovery-server': params.DISCOVERY_SERVER_BRANCH,
-                            'genai-service': params.GENAI_SERVICE_BRANCH,
                             'vets-service': params.VETS_SERVICE_BRANCH,
                             'visits-service': params.VISITS_SERVICE_BRANCH
                         ]
