@@ -6,6 +6,8 @@
 
     <!-- Get service name from Spring -->
     <springProperty scope="context" name="app" source="spring.application.name"/>
+
+    <!-- CONSOLE appender for kubectl logs -->
     <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
         <encoder>
             <pattern>%d{HH:mm:ss.SSS} [%X{traceId:-},%X{spanId:-}] %-5level %logger{36} - %msg%n</pattern>
@@ -36,14 +38,8 @@
         </format>
     </appender>
 
-    <appender name="ASYNC_LOKI" class="ch.qos.logback.classic.AsyncAppender">
-        <appender-ref ref="LOKI"/>
-        <queueSize>512</queueSize>
-        <discardingThreshold>0</discardingThreshold>
-    </appender>
-
     <root level="INFO">
-        <appender-ref ref="CONSOLE"/>      
-        <appender-ref ref="ASYNC_LOKI"/>   
+        <appender-ref ref="CONSOLE"/> 
+        <appender-ref ref="LOKI"/>    
     </root>
 </configuration>
