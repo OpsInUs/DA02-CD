@@ -27,6 +27,7 @@ pipeline {
                     if (tagName) {
                         env.TARGET_ENV = 'staging'
                         env.IMAGE_TAG = tagName
+                        env.CMT_TAG = tagName
                     } else if (env.CURRENT_BRANCH == 'main' || env.CURRENT_BRANCH == 'master') {
                         env.TARGET_ENV = 'dev'
                         env.IMAGE_TAG = 'latest'
@@ -167,7 +168,7 @@ pipeline {
         stage('Update Helm Repository') {
             steps {
                 script {
-                    if(!env.TAG_NAME) {
+                    if(!env.CMT_TAG) {
                         echo "No tag found, skipping Helm repository update."
                         return
                     }
