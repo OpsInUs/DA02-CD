@@ -27,7 +27,7 @@ pipeline {
         TARGET_NAMESPACE          = 'dev-review'
 
 
-        JENKINS_HOST = 'https://1de5-14-224-172-48.ngrok-free.app' 
+        JENKINS_HOST = 'https://0fd7-115-74-192-50.ngrok-free.app' 
         TARGET_JOB_NAME = 'clean-up-cd'
     }
 
