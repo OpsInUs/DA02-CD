@@ -13,7 +13,6 @@
         <artifactId>spring-petclinic-microservices</artifactId>
         <version>3.4.1</version>
     </parent>
-    
 
     <properties>
         <webjars-bootstrap.version>5.3.3</webjars-bootstrap.version>
