@@ -19,7 +19,7 @@ pipeline {
         SERVICES_CD_REPO_URL      = 'https://github.com/OpsInUs/DA02-CD.git'
         DOCKER_REGISTRY_USERNAME  = 'vuhoabinhthachhoa'
         TARGET_NAMESPACE          = 'dev-review'
-        JENKINS_HOST             = 'https://cda5-115-74-192-50.ngrok-free.app'
+        JENKINS_HOST             = 'https://0fd7-115-74-192-50.ngrok-free.app'
         TARGET_JOB_NAME          = 'clean-up-cd'
     }
 
